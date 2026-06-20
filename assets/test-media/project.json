@@ -1,0 +1,37 @@
+{
+  "name": "Sample Reel",
+  "canvas": { "width": 1080, "height": 1920, "fps": 30, "backgroundColor": "#0a0a0f" },
+  "mediaLibrary": [
+    { "id": "a1", "kind": "video", "uri": "asset://intro.mp4", "naturalWidth": 1080, "naturalHeight": 1920 },
+    { "id": "a2", "kind": "video", "uri": "asset://broll.mp4", "naturalWidth": 1920, "naturalHeight": 1080 },
+    { "id": "a3", "kind": "image", "uri": "asset://logo.png", "naturalWidth": 512, "naturalHeight": 512 },
+    { "id": "a4", "kind": "audio", "uri": "asset://track.mp3", "naturalWidth": 0, "naturalHeight": 0 }
+  ],
+  "tracks": [
+    {
+      "id": "t1", "kind": "video", "enabled": true, "opacity": 1,
+      "clips": [
+        { "id": "c1", "kind": "video", "assetId": "a1", "timelineStart": 0, "timelineEnd": 3000, "sourceIn": 0, "sourceOut": 3000, "speed": 1, "opacity": 1, "opacityFadeIn": 0, "opacityFadeOut": 300 },
+        { "id": "c2", "kind": "video", "assetId": "a2", "timelineStart": 3000, "timelineEnd": 6600, "sourceIn": 1200, "sourceOut": 4800, "speed": 1, "opacity": 1, "opacityFadeIn": 180, "opacityFadeOut": 0 }
+      ]
+    },
+    {
+      "id": "t1b", "kind": "video", "enabled": true, "opacity": 1,
+      "clips": [
+        { "id": "c5", "kind": "video", "assetId": "a3", "timelineStart": 600, "timelineEnd": 2400, "sourceIn": 0, "sourceOut": 0, "speed": 1, "transform": { "centerX": 0.5, "centerY": 0.32, "scale": 0.6, "rotation": 0, "flipH": false, "flipV": false }, "opacity": 1 }
+      ]
+    },
+    {
+      "id": "t2", "kind": "text", "enabled": true, "opacity": 1,
+      "clips": [
+        { "id": "c3", "kind": "text", "timelineStart": 300, "timelineEnd": 2100, "sourceIn": 0, "sourceOut": 1800, "speed": 1, "transform": { "centerX": 0.5, "centerY": 0.82, "scale": 1, "rotation": 0, "flipH": false, "flipV": false }, "opacity": 1, "opacityFadeIn": 120, "opacityFadeOut": 120, "text": { "content": "OCEAN", "fontName": "DejaVu Sans", "fontSize": 120, "color": "#ffffff", "align": "center", "lineHeight": 1.2 } }
+      ]
+    },
+    {
+      "id": "t3", "kind": "audio", "enabled": true, "opacity": 1,
+      "clips": [
+        { "id": "c4", "kind": "audio", "assetId": "a4", "timelineStart": 0, "timelineEnd": 6600, "sourceIn": 0, "sourceOut": 6600, "speed": 1, "opacity": 1, "volume": 0.8 }
+      ]
+    }
+  ]
+}
