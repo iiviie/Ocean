@@ -29,6 +29,8 @@ There are two parallel workstreams. **A — Manipulation** (what the agent can c
 - [ ] **Transitions** — built-in in/out (fade/slide/wipe) + clip-overlap crossfade. ◆
 
 ### A3 — Convenience & robustness
+- [x] **`batch` tool** — run many tool calls in one request (ops:[{tool,args}]), in order, best-effort. Saves round-trips/tokens for repetitive edits (delete/move/style many clips). Verified.
+- [x] **Document persistence** — localStorage autosave + restore so edits survive reload/HMR (`src/model/persist.ts`); sample is first-run fallback only.
 - [x] **Multi-client MCP bridge** — singleton broker (`mcp/bridge.ts`) owns the port; UI + all adapters are clients; N agents/clients drive one UI concurrently (was: only one at a time, port-bind race). Auto-spawned, self-healing, durable. Verified.
 - [x] `get_frame(assetId, atSec)` — source-asset frame → existing `{image:"data:..."}` MCP image block. *(composited-timeline frame at a playhead time — rendering all clips at t — is still TODO; needs canvas capture)*
 - [ ] `duplicate_clip`, `set_range` tool, optional ephemerals (`set_playing`, `select_asset`, `set_zoom`)
