@@ -6,7 +6,6 @@
 // adapters convert at the boundary and keep outputs compact.
 import { useStore } from "@/model/store";
 import { oceanAgent } from "@/agent/bridge";
-import { findClip } from "@/model/selectors";
 import { nextId } from "@/model/ids";
 import { round2, secondsToTicks, ticksToSeconds } from "@/model/time";
 import { inElectron, probeMedia, importDialog, resolveAssetPath, analyzeMedia, analysisStatus, readAnalysis, extractFrame } from "@/engine/render";
@@ -21,10 +20,31 @@ export interface ToolDef {
   run: (args: Record<string, unknown>) => unknown | Promise<unknown>;
 }
 
-function requireClip(clipId: string) {
-  const found = findClip(useStore.getState().project, clipId);
-  if (!found) throw new Error(`clip ${clipId} not found`);
-  return found;
+/** Clip target(s): a tool accepts either `clipId` (single) or `clipIds` (array),
+ *  so "delete c1 c2 c3" / "dim these clips" is one call, not N. */
+function clipTargets(a: Record<string, unknown>): string[] {
+  if (Array.isArray(a.clipIds)) return (a.clipIds as unknown[]).filter((x): x is string => typeof x === "string");
+  if (typeof a.clipId === "string") return [a.clipId];
+  return [];
+}
+
+/** Apply the same command to each target clip. One clip → {diff} (unchanged
+ *  shape). Multiple → {count, ok, diffs, errors?}, best-effort: one bad id won't
+ *  abort the rest. */
+function eachClip(a: Record<string, unknown>, make: (id: string) => Command) {
+  const ids = clipTargets(a);
+  if (!ids.length) throw new Error("provide clipId or clipIds[]");
+  if (ids.length === 1) return { diff: dispatch(make(ids[0])) };
+  const diffs: string[] = [];
+  const errors: Record<string, string> = {};
+  for (const id of ids) {
+    try {
+      diffs.push(dispatch(make(id)));
+    } catch (e) {
+      errors[id] = e instanceof Error ? e.message : String(e);
+    }
+  }
+  return { count: ids.length, ok: diffs.length, diffs, ...(Object.keys(errors).length ? { errors } : {}) };
 }
 
 interface ProbeResult {
@@ -398,51 +418,50 @@ export const tools: Record<string, ToolDef> = {
       return { newClipId, diff };
     },
   },
-  delete_clip: { name: "delete_clip", description: "Delete a clip (and its linked audio/video partner, if any). Args: clipId, ripple? (close the gap).", run: (a) => ({ diff: dispatch({ type: "delete_clip", clipId: a.clipId as string, ripple: a.ripple as boolean }) }) },
+  delete_clip: { name: "delete_clip", description: "Delete clip(s) (and any linked audio/video partner). Args: clipId OR clipIds[], ripple? (close the gap). e.g. delete several at once: clipIds:['c1','c2','c3'].", run: (a) => eachClip(a, (id) => ({ type: "delete_clip", clipId: id, ripple: a.ripple as boolean })) },
   unlink_clip: { name: "unlink_clip", description: "Unlink a video clip from its auto-created audio clip so they move independently. Args: clipId.", run: (a) => ({ diff: dispatch({ type: "unlink_clip", clipId: a.clipId as string }) }) },
 
   // ---------- properties ----------
   set_transform: {
     name: "set_transform",
-    description: "Set clip transform (center-anchored, normalized 0..1). Args: clipId, centerX?, centerY?, scale?, rotation?, flipH?, flipV?.",
+    description: "Set clip transform (center-anchored, normalized 0..1). Args: clipId OR clipIds[], centerX?, centerY?, scale?, rotation?, flipH?, flipV?.",
     run: (a) => {
-      requireClip(a.clipId as string);
       const patch: Record<string, unknown> = {};
       for (const k of ["centerX", "centerY", "scale", "rotation", "flipH", "flipV"]) if (a[k] != null) patch[k] = a[k];
-      return { diff: dispatch({ type: "set_transform", clipId: a.clipId as string, patch }) };
+      return eachClip(a, (id) => ({ type: "set_transform", clipId: id, patch }));
     },
   },
   set_text: {
     name: "set_text",
-    description: "Edit a text clip. Args: clipId, content?, fontName?, fontSize?, color?, align?, lineHeight?, fontWeight? (100-900), italic?, letterSpacing? (px), backgroundColor? (plate), strokeColor?, strokeWidth? (px).",
+    description: "Edit text clip(s). Args: clipId OR clipIds[], content?, fontName?, fontSize?, color?, align?, lineHeight?, fontWeight? (100-900), italic?, letterSpacing? (px), backgroundColor? (plate), strokeColor?, strokeWidth? (px).",
     run: (a) => {
       const patch: Record<string, unknown> = {};
       for (const k of ["content", "fontName", "fontSize", "color", "align", "lineHeight", "fontWeight", "italic", "letterSpacing", "backgroundColor", "strokeColor", "strokeWidth"]) if (a[k] != null) patch[k] = a[k];
-      return { diff: dispatch({ type: "set_text", clipId: a.clipId as string, patch }) };
+      return eachClip(a, (id) => ({ type: "set_text", clipId: id, patch }));
     },
   },
   set_color: {
     name: "set_color",
-    description: "Color-correct a video/image clip. Args: clipId, brightness? (-1..1, 0=none), contrast? (-1..1), saturation? (0..2, 1=none), hue? (deg), filter? ('none'|'grayscale'|'sepia'|'invert'|'vintage').",
+    description: "Color-correct video/image clip(s). Args: clipId OR clipIds[], brightness? (-1..1, 0=none), contrast? (-1..1), saturation? (0..2, 1=none), hue? (deg), filter? ('none'|'grayscale'|'sepia'|'invert'|'vintage').",
     run: (a) => {
       const patch: Record<string, unknown> = {};
       for (const k of ["brightness", "contrast", "saturation", "hue", "filter"]) if (a[k] != null) patch[k] = a[k];
-      return { diff: dispatch({ type: "set_color", clipId: a.clipId as string, patch }) };
+      return eachClip(a, (id) => ({ type: "set_color", clipId: id, patch }));
     },
   },
   set_style: {
     name: "set_style",
-    description: "Set a visual clip's appearance/compositing. Args: clipId, blendMode? ('normal'|'multiply'|'screen'|'overlay'|'darken'|'lighten'|'difference'|'add'), cornerRadius? (0..1, 1=pill), borderColor?, borderWidth? (px), shadow? (bool).",
+    description: "Set visual clip(s) appearance/compositing. Args: clipId OR clipIds[], blendMode? ('normal'|'multiply'|'screen'|'overlay'|'darken'|'lighten'|'difference'|'add'), cornerRadius? (0..1, 1=pill), borderColor?, borderWidth? (px), shadow? (bool).",
     run: (a) => {
       const patch: Record<string, unknown> = {};
       for (const k of ["blendMode", "cornerRadius", "borderColor", "borderWidth", "shadow"]) if (a[k] != null) patch[k] = a[k];
-      return { diff: dispatch({ type: "set_style", clipId: a.clipId as string, patch }) };
+      return eachClip(a, (id) => ({ type: "set_style", clipId: id, patch }));
     },
   },
-  set_opacity: { name: "set_opacity", description: "Set clip opacity 0..1. Args: clipId, opacity.", run: (a) => ({ diff: dispatch({ type: "set_opacity", clipId: a.clipId as string, opacity: a.opacity as number }) }) },
-  set_fade: { name: "set_fade", description: "Fade a clip in/out — opacity for visual clips, volume for audio clips. Args: clipId, fadeInSec?, fadeOutSec?.", run: (a) => ({ diff: dispatch({ type: "set_fade", clipId: a.clipId as string, fadeInTicks: a.fadeInSec != null ? sec(a.fadeInSec as number) : undefined, fadeOutTicks: a.fadeOutSec != null ? sec(a.fadeOutSec as number) : undefined }) }) },
-  set_volume: { name: "set_volume", description: "Set clip volume 0..1. Args: clipId, volume.", run: (a) => ({ diff: dispatch({ type: "set_volume", clipId: a.clipId as string, volume: a.volume as number }) }) },
-  set_speed: { name: "set_speed", description: "Retime a clip. Args: clipId, speed (e.g. 2 = 2x).", run: (a) => ({ diff: dispatch({ type: "set_speed", clipId: a.clipId as string, speed: a.speed as number }) }) },
+  set_opacity: { name: "set_opacity", description: "Set clip opacity 0..1. Args: clipId OR clipIds[], opacity.", run: (a) => eachClip(a, (id) => ({ type: "set_opacity", clipId: id, opacity: a.opacity as number })) },
+  set_fade: { name: "set_fade", description: "Fade clip(s) in/out — opacity for visual clips, volume for audio clips. Args: clipId OR clipIds[], fadeInSec?, fadeOutSec?.", run: (a) => eachClip(a, (id) => ({ type: "set_fade", clipId: id, fadeInTicks: a.fadeInSec != null ? sec(a.fadeInSec as number) : undefined, fadeOutTicks: a.fadeOutSec != null ? sec(a.fadeOutSec as number) : undefined })) },
+  set_volume: { name: "set_volume", description: "Set clip volume 0..1. Args: clipId OR clipIds[], volume.", run: (a) => eachClip(a, (id) => ({ type: "set_volume", clipId: id, volume: a.volume as number })) },
+  set_speed: { name: "set_speed", description: "Retime clip(s). Args: clipId OR clipIds[], speed (e.g. 2 = 2x).", run: (a) => eachClip(a, (id) => ({ type: "set_speed", clipId: id, speed: a.speed as number })) },
 
   // ---------- canvas ----------
   set_canvas: {
