@@ -69,14 +69,15 @@ Center-anchored, resolution-independent. See `Transform` (`types.ts:49`).
 | `shadow` | Drop shadow (offset/blur/color) | px + hex | ➕ | proposed |
 
 ### 2.4 Color correction — *the look* (video / image)
-None exist today. Whole group is ➕. Proposed command: `set_color`.
+Core grade + named looks ship via the **`set_color`** command + tool (✅), applied as a CSS `filter` on the media element. Advanced grading is still ➕.
 
 | Property | Does | Range / unit | Status |
 |---|---|---|---|
-| `brightness` | Lift overall luminance | −1..1 (0 = none) | ➕ |
-| `contrast` | Tonal spread | −1..1 | ➕ |
-| `saturation` | Color intensity | 0..2 (1 = none) | ➕ |
-| `hue` | Hue rotation | degrees −180..180 | ➕ |
+| `brightness` | Lift overall luminance | −1..1 (0 = none) | ✅ `set_color` |
+| `contrast` | Tonal spread | −1..1 | ✅ `set_color` |
+| `saturation` | Color intensity | 0..2 (1 = none) | ✅ `set_color` |
+| `hue` | Hue rotation | degrees −180..180 | ✅ `set_color` |
+| `filter` | Named one-shot look | none/grayscale/sepia/invert/vintage | ✅ `set_color` |
 | `temperature` / `tint` | White balance warm/cool, green/magenta | −1..1 | ➕ |
 | `exposure` / `gamma` | Stops / midtone curve | stops / 0.1..3 | ➕ |
 | `lut` | 3D LUT reference | asset/file ref | ➕ (advanced) |
@@ -185,7 +186,7 @@ One property group ↔ one command keeps the surface learnable. ✅ implemented,
 | Temporal | `move_clip`, `trim_clip`, `set_speed`, `split_clip`, `delete_clip` | same names | ✅ |
 | Transform | `set_transform` | `set_transform` | ✅ (crop/anchor ➕) |
 | Appearance | `set_opacity`, `set_fade` | same | ✅ (blend/radius/border/shadow ➕ → `set_style`) |
-| Color | `set_color` | `set_color` | ➕ |
+| Color | `set_color` | `set_color` | ✅ core grade + filter presets (temp/exposure/LUT ➕) |
 | Audio | `set_volume`, `set_fade{audio}`, `set_pan` | same | ✅ volume; fades/pan ➕ |
 | Typography | `set_text` | `set_text` | ✅ core (incl. `lineHeight`); extended props ➕ |
 | Animation | `add_keyframe` / `remove_keyframe` / `clear_keyframes` | same | ➕ |
