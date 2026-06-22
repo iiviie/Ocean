@@ -16,6 +16,13 @@ const oceanNative = {
   probeMedia: (path: string): Promise<ProbeInfo> => ipcRenderer.invoke("probe-media", path),
   importDialog: (): Promise<({ path: string; name: string } & ProbeInfo) | null> =>
     ipcRenderer.invoke("import-dialog"),
+  // ---- perception analysis ----
+  analyzeMedia: (hash: string, path: string, kinds: string[], opts: { durationSec: number }): Promise<Record<string, string>> =>
+    ipcRenderer.invoke("analyze-media", hash, path, kinds, opts),
+  analysisStatus: (hash: string, kinds: string[]): Promise<Record<string, string>> =>
+    ipcRenderer.invoke("analysis-status", hash, kinds),
+  readAnalysis: (hash: string, kind: string): Promise<unknown | null> =>
+    ipcRenderer.invoke("read-analysis", hash, kind),
 };
 
 contextBridge.exposeInMainWorld("oceanNative", oceanNative);

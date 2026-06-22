@@ -16,6 +16,9 @@ interface OceanNative {
   ping(): Promise<string>;
   probeMedia(path: string): Promise<ProbeInfo>;
   importDialog(): Promise<({ path: string; name: string } & ProbeInfo) | null>;
+  analyzeMedia(hash: string, path: string, kinds: string[], opts: { durationSec: number }): Promise<Record<string, string>>;
+  analysisStatus(hash: string, kinds: string[]): Promise<Record<string, string>>;
+  readAnalysis(hash: string, kind: string): Promise<unknown | null>;
 }
 
 declare global {
@@ -52,4 +55,17 @@ export async function probeMedia(path: string) {
 
 export async function importDialog() {
   return native()?.importDialog() ?? null;
+}
+
+// ---- perception analysis bridge (desktop only) ----
+export async function analyzeMedia(hash: string, path: string, kinds: string[], durationSec: number) {
+  return native()?.analyzeMedia(hash, path, kinds, { durationSec }) ?? null;
+}
+
+export async function analysisStatus(hash: string, kinds: string[]) {
+  return native()?.analysisStatus(hash, kinds) ?? null;
+}
+
+export async function readAnalysis(hash: string, kind: string) {
+  return native()?.readAnalysis(hash, kind) ?? null;
 }

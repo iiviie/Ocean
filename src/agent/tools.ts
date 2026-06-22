@@ -9,7 +9,7 @@ import { oceanAgent } from "@/agent/bridge";
 import { findClip } from "@/model/selectors";
 import { nextId } from "@/model/ids";
 import { round2, secondsToTicks, ticksToSeconds } from "@/model/time";
-import { inElectron, probeMedia, importDialog } from "@/engine/render";
+import { inElectron, probeMedia, importDialog, resolveAssetPath, analyzeMedia, analysisStatus, readAnalysis } from "@/engine/render";
 import type { Command } from "@/model/commands";
 
 const dispatch = (cmd: Command) => useStore.getState().dispatch(cmd, "agent");
@@ -102,6 +102,22 @@ function probeBrowser(file: File): Promise<{ url: string } & ProbeResult> {
   });
 }
 
+interface ShotsData {
+  durationSec: number;
+  shotCount: number;
+  shots: { idx: number; startSec: number; endSec: number; durSec: number }[];
+}
+
+/** Resolve an asset to its analysis context: the fileIdentity cache key, the
+ *  real filesystem path, and its duration in seconds. */
+function analysisCtx(assetId: string) {
+  const asset = useStore.getState().project.mediaLibrary.find((a) => a.id === assetId);
+  if (!asset) throw new Error(`asset ${assetId} not found`);
+  const hash = asset.fileIdentity?.hash;
+  if (!hash) throw new Error(`asset ${assetId} has no fileIdentity — re-import it in the desktop app`);
+  return { asset, hash, path: resolveAssetPath(asset.uri), durationSec: ticksToSeconds(asset.durationTicks) };
+}
+
 export const tools: Record<string, ToolDef> = {
   // ---------- reads / awareness ----------
   get_project: { name: "get_project", description: "Project facts: canvas, fps, duration, track/asset counts.", run: () => oceanAgent.get_project() },
@@ -152,6 +168,57 @@ export const tools: Record<string, ToolDef> = {
       const info = await probeMedia(path);
       if (!info) throw new Error("probe failed");
       return addAsset(path, path.split("/").pop() ?? path, info);
+    },
+  },
+
+  // ---------- perception (media → text) ----------
+  analyze_media: {
+    name: "analyze_media",
+    description: "Kick off perception analysis for an asset (async, non-blocking). Args: assetId, kinds? (default ['shots']). Returns per-kind status; then poll get_analysis_status or read with get_shots. Desktop app only.",
+    run: async (a) => {
+      if (!inElectron) throw new Error("analysis needs the desktop app (pnpm dev)");
+      const { hash, path, durationSec } = analysisCtx(a.assetId as string);
+      const kinds = (a.kinds as string[] | undefined)?.length ? (a.kinds as string[]) : ["shots"];
+      return { assetId: a.assetId, status: await analyzeMedia(hash, path, kinds, durationSec) };
+    },
+  },
+  get_analysis_status: {
+    name: "get_analysis_status",
+    description: "Per-kind analysis status for an asset: ready | pending | none | unsupported. Args: assetId, kinds? (default ['shots']).",
+    run: async (a) => {
+      if (!inElectron) throw new Error("analysis needs the desktop app");
+      const { hash } = analysisCtx(a.assetId as string);
+      const kinds = (a.kinds as string[] | undefined)?.length ? (a.kinds as string[]) : ["shots"];
+      return { assetId: a.assetId, status: await analysisStatus(hash, kinds) };
+    },
+  },
+  get_shots: {
+    name: "get_shots",
+    description: "Windowed shot list for a video asset (idx, start, end, dur in seconds). Args: assetId, fromSec?, toSec?. If not analyzed yet returns { status }; call analyze_media first.",
+    run: async (a) => {
+      if (!inElectron) throw new Error("analysis needs the desktop app");
+      const { asset, hash } = analysisCtx(a.assetId as string);
+      const data = (await readAnalysis(hash, "shots")) as ShotsData | null;
+      if (!data) {
+        const status = await analysisStatus(hash, ["shots"]);
+        return { assetId: a.assetId, status: status?.shots ?? "none" };
+      }
+      // Reflect the cached analysis onto the asset (idempotent, via the bus).
+      if (asset.analysis?.shotsRef !== hash) {
+        dispatch({ type: "set_asset_analysis", assetId: asset.id, patch: { shotsRef: hash, analyzedAt: Date.now() } });
+      }
+      const from = (a.fromSec as number) ?? 0;
+      const to = a.toSec != null ? (a.toSec as number) : Infinity;
+      const win = data.shots.filter((s) => s.endSec > from && s.startSec < to);
+      const CAP = 60;
+      const shots = win.slice(0, CAP).map((s) => ({ i: s.idx, start: s.startSec, end: s.endSec, dur: s.durSec }));
+      return {
+        assetId: a.assetId,
+        durationSec: data.durationSec,
+        total: data.shots.length,
+        shots,
+        ...(win.length > CAP ? { truncated: true, hint: "narrow fromSec/toSec" } : {}),
+      };
     },
   },
 
