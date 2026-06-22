@@ -2,11 +2,12 @@
 // media to the renderer (so <video>/<img> can load user files under webSecurity),
 // and IPC for ffprobe-based import.
 import { app, BrowserWindow, ipcMain, dialog, protocol, net } from "electron";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash } from "node:crypto";
 import { open, stat, mkdir, readFile, writeFile, readdir } from "node:fs/promises";
+import { buildExportArgs, runExport, findFont, type ProjectDoc, type ExportOpts } from "./export";
 
 const execFileP = promisify(execFile);
 
@@ -285,6 +286,24 @@ async function analysisStatus(hash: string, kinds: string[]): Promise<Record<str
   return out;
 }
 
+// ---- project files (a project is a folder holding project.json) ----
+// Assets are referenced by absolute path (not copied), so the folder only needs
+// to carry the document JSON. New/Open/Save all flow through these handlers.
+const PROJECT_FILE = "project.json";
+
+async function readProjectAt(dir: string): Promise<string | null> {
+  try {
+    return await readFile(join(dir, PROJECT_FILE), "utf8");
+  } catch {
+    return null;
+  }
+}
+
+async function writeProjectAt(dir: string, json: string): Promise<void> {
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, PROJECT_FILE), json, "utf8");
+}
+
 app.whenReady().then(() => {
   // Serve local files to the renderer via ocean-media://media<abs-path>
   protocol.handle("ocean-media", (request) => {
@@ -319,6 +338,60 @@ app.whenReady().then(() => {
     const path = res.filePaths[0];
     const info = await probe(path);
     return { path, name: path.split("/").pop() ?? path, ...info };
+  });
+
+  // ---- project file IO ----
+  ipcMain.handle("project-pick-new", async (_e, defaultName: string) => {
+    const res = await dialog.showSaveDialog({
+      title: "Create Project",
+      defaultPath: defaultName || "Untitled",
+      buttonLabel: "Create Project",
+      properties: ["createDirectory"],
+    });
+    if (res.canceled || !res.filePath) return null;
+    // Treat the chosen path as the project folder (strip any extension the OS added).
+    const p = res.filePath;
+    return p.replace(/\.(ocean|json)$/i, "");
+  });
+  ipcMain.handle("project-open", async () => {
+    const res = await dialog.showOpenDialog({
+      title: "Open Project",
+      buttonLabel: "Open",
+      properties: ["openDirectory"],
+    });
+    if (res.canceled || !res.filePaths[0]) return null;
+    const dir = res.filePaths[0];
+    const json = await readProjectAt(dir);
+    if (json == null) throw new Error(`No ${PROJECT_FILE} in ${basename(dir)}`);
+    return { path: dir, json };
+  });
+  ipcMain.handle("project-read", (_e, dir: string) => readProjectAt(dir));
+  ipcMain.handle("project-save", async (_e, dir: string, json: string) => {
+    await writeProjectAt(dir, json);
+    return true;
+  });
+
+  // ---- export ----
+  ipcMain.handle("export-pick", async (_e, defaultName: string) => {
+    const res = await dialog.showSaveDialog({
+      title: "Export Video",
+      defaultPath: defaultName.endsWith(".mp4") ? defaultName : `${defaultName}.mp4`,
+      buttonLabel: "Export",
+      filters: [{ name: "MP4 video", extensions: ["mp4"] }],
+    });
+    return res.canceled || !res.filePath ? null : res.filePath;
+  });
+  ipcMain.handle("export-video", async (e, spec: { project: ProjectDoc } & ExportOpts) => {
+    try {
+      const fontFile = await findFont();
+      const { args, durationSec } = buildExportArgs(spec.project, spec, fontFile);
+      await runExport(args, durationSec, (p) => {
+        if (!e.sender.isDestroyed()) e.sender.send("export-progress", p);
+      });
+      return { ok: true, outPath: spec.outPath };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
   });
 
   createWindow();

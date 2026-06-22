@@ -25,6 +25,25 @@ const oceanNative = {
     ipcRenderer.invoke("read-analysis", hash, kind),
   extractFrame: (path: string, atSec: number, maxPx: number): Promise<string> =>
     ipcRenderer.invoke("extract-frame", path, atSec, maxPx),
+  // ---- project files ----
+  projectPickNew: (defaultName: string): Promise<string | null> =>
+    ipcRenderer.invoke("project-pick-new", defaultName),
+  projectOpen: (): Promise<{ path: string; json: string } | null> =>
+    ipcRenderer.invoke("project-open"),
+  projectRead: (dir: string): Promise<string | null> =>
+    ipcRenderer.invoke("project-read", dir),
+  projectSave: (dir: string, json: string): Promise<boolean> =>
+    ipcRenderer.invoke("project-save", dir, json),
+  // ---- export ----
+  exportPick: (defaultName: string): Promise<string | null> =>
+    ipcRenderer.invoke("export-pick", defaultName),
+  exportVideo: (spec: unknown): Promise<{ ok: boolean; outPath?: string; error?: string }> =>
+    ipcRenderer.invoke("export-video", spec),
+  onExportProgress: (cb: (p: { progress: number; timeSec?: number }) => void): (() => void) => {
+    const listener = (_e: unknown, p: { progress: number; timeSec?: number }) => cb(p);
+    ipcRenderer.on("export-progress", listener);
+    return () => ipcRenderer.removeListener("export-progress", listener);
+  },
 };
 
 contextBridge.exposeInMainWorld("oceanNative", oceanNative);
