@@ -164,6 +164,15 @@ export const tools: Record<string, ToolDef> = {
     },
   },
   remove_track: { name: "remove_track", description: "Remove a track by id. Args: trackId.", run: (a) => ({ diff: dispatch({ type: "remove_track", trackId: a.trackId as string }) }) },
+  set_track: {
+    name: "set_track",
+    description: "Set track/lane properties. Args: trackId, name?, enabled? (false hides a video lane / mutes an audio lane), locked?, opacity? (0..1, video lanes), volume? (0..1, audio lanes).",
+    run: (a) => {
+      const patch: Record<string, unknown> = {};
+      for (const k of ["name", "enabled", "locked", "opacity", "volume"]) if (a[k] != null) patch[k] = a[k];
+      return { diff: dispatch({ type: "set_track", trackId: a.trackId as string, patch }) };
+    },
+  },
 
   // ---------- clip gestures ----------
   add_clip: {
@@ -207,10 +216,10 @@ export const tools: Record<string, ToolDef> = {
   },
   set_text: {
     name: "set_text",
-    description: "Edit a text clip. Args: clipId, content?, fontName?, fontSize?, color?, align?.",
+    description: "Edit a text clip. Args: clipId, content?, fontName?, fontSize?, color?, align?, lineHeight?.",
     run: (a) => {
       const patch: Record<string, unknown> = {};
-      for (const k of ["content", "fontName", "fontSize", "color", "align"]) if (a[k] != null) patch[k] = a[k];
+      for (const k of ["content", "fontName", "fontSize", "color", "align", "lineHeight"]) if (a[k] != null) patch[k] = a[k];
       return { diff: dispatch({ type: "set_text", clipId: a.clipId as string, patch }) };
     },
   },
@@ -218,6 +227,17 @@ export const tools: Record<string, ToolDef> = {
   set_fade: { name: "set_fade", description: "Set opacity fades. Args: clipId, fadeInSec?, fadeOutSec?.", run: (a) => ({ diff: dispatch({ type: "set_fade", clipId: a.clipId as string, fadeInTicks: a.fadeInSec != null ? sec(a.fadeInSec as number) : undefined, fadeOutTicks: a.fadeOutSec != null ? sec(a.fadeOutSec as number) : undefined }) }) },
   set_volume: { name: "set_volume", description: "Set clip volume 0..1. Args: clipId, volume.", run: (a) => ({ diff: dispatch({ type: "set_volume", clipId: a.clipId as string, volume: a.volume as number }) }) },
   set_speed: { name: "set_speed", description: "Retime a clip. Args: clipId, speed (e.g. 2 = 2x).", run: (a) => ({ diff: dispatch({ type: "set_speed", clipId: a.clipId as string, speed: a.speed as number }) }) },
+
+  // ---------- canvas ----------
+  set_canvas: {
+    name: "set_canvas",
+    description: "Set canvas/output settings. Args: width?, height? (px), fps? (24|25|30|60), backgroundColor? (hex).",
+    run: (a) => {
+      const patch: Record<string, unknown> = {};
+      for (const k of ["width", "height", "fps", "backgroundColor"]) if (a[k] != null) patch[k] = a[k];
+      return { diff: dispatch({ type: "set_canvas", patch }) };
+    },
+  },
 
   // ---------- markers / playhead ----------
   add_marker: { name: "add_marker", description: "Add a timeline marker (e.g. a beat). Args: atSec, kind? ('beat'|'downbeat'|'chapter'|'generic'), label?.", run: (a) => ({ diff: dispatch({ type: "add_marker", atTicks: sec(a.atSec as number), kind: a.kind as "beat", label: a.label as string }) }) },

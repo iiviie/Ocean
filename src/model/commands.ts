@@ -23,6 +23,7 @@ export type Command =
   | { type: "import_media"; asset: Omit<MediaAsset, "id">; assetId?: string }
   | { type: "add_track"; kind: TrackKind; name?: string; trackId?: string }
   | { type: "remove_track"; trackId: string }
+  | { type: "set_track"; trackId: string; patch: Partial<Pick<Track, "name" | "enabled" | "locked" | "opacity" | "volume">> }
   // ---- clip gestures ----
   | {
       type: "add_clip";
@@ -160,7 +161,9 @@ function linkedPartner(project: Project, clip: Clip): { track: Track; clip: Clip
 function audioTrackBelow(project: Project, videoTrack: Track): Track {
   const vi = project.tracks.indexOf(videoTrack);
   const below = project.tracks[vi - 1];
-  if (below && below.kind === "audio") return below;
+  // Reuse the lane right below only if it's already a video's audio lane (holds
+  // a linked clip) — never hijack a manual/music audio track.
+  if (below && below.kind === "audio" && below.clips.some((c) => c.linkedClipId)) return below;
   const audioCount = project.tracks.filter((tr) => tr.kind === "audio").length;
   const track: Track = {
     id: nextId("t"),
@@ -207,7 +210,10 @@ export function applyCommand(ctx: ApplyContext, cmd: Command): Diff {
         volume: 1,
         clips: [],
       };
-      project.tracks.push(track);
+      // Audio lanes live at the bottom of the stack, video lanes on top
+      // (index 0 = bottom lane). Keeps the "video over audio" layering invariant.
+      if (cmd.kind === "audio") project.tracks.unshift(track);
+      else project.tracks.push(track);
       return `added ${cmd.kind} track ${id}`;
     }
 
@@ -461,6 +467,17 @@ export function applyCommand(ctx: ApplyContext, cmd: Command): Diff {
       const before = project.markers.length;
       project.markers = cmd.kind ? project.markers.filter((m) => m.kind !== cmd.kind) : [];
       return `cleared ${before - project.markers.length} markers`;
+    }
+
+    case "set_track": {
+      const track = project.tracks.find((tr) => tr.id === cmd.trackId);
+      if (!track) throw new Error(`track ${cmd.trackId} not found`);
+      if (cmd.patch.name != null) track.name = cmd.patch.name;
+      if (cmd.patch.enabled != null) track.enabled = cmd.patch.enabled;
+      if (cmd.patch.locked != null) track.locked = cmd.patch.locked;
+      if (cmd.patch.opacity != null) track.opacity = Math.max(0, Math.min(1, cmd.patch.opacity));
+      if (cmd.patch.volume != null) track.volume = Math.max(0, Math.min(1, cmd.patch.volume));
+      return `set track[${Object.keys(cmd.patch).join(",")}] on ${track.id}`;
     }
 
     case "set_canvas": {
