@@ -415,11 +415,11 @@ function ClipView({
       title={clip.label ?? clip.id}
     >
       <span className="pointer-events-none truncate">{clip.text ? clip.text.content : clip.label ?? clip.id}</span>
-      {/* trim handles (media clips, unlocked) */}
-      {clip.assetId && !locked && (
+      {/* trim handles — any unlocked clip, incl. text (sourceIn/Out drive its duration) */}
+      {!locked && (
         <>
-          <div className="absolute inset-y-0 left-0 w-1.5 cursor-ew-resize bg-white/0 hover:bg-white/40" onMouseDown={trimEdge("in")} />
-          <div className="absolute inset-y-0 right-0 w-1.5 cursor-ew-resize bg-white/0 hover:bg-white/40" onMouseDown={trimEdge("out")} />
+          <div className="absolute inset-y-0 left-0 z-10 w-2 cursor-ew-resize bg-white/0 hover:bg-white/40" onMouseDown={trimEdge("in")} />
+          <div className="absolute inset-y-0 right-0 z-10 w-2 cursor-ew-resize bg-white/0 hover:bg-white/40" onMouseDown={trimEdge("out")} />
         </>
       )}
     </div>
