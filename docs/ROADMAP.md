@@ -17,7 +17,7 @@ There are two parallel workstreams. **A — Manipulation** (what the agent can c
 - [x] Design docs: property model, perception layer, tooling plan
 
 ### A1 — Finish basic property coverage (high ROI, mostly small)
-- [ ] **Audio-aware `set_fade`** — today it only sets *opacity* fades; on an audio clip that's silent-effect. Generalize: fade the natural channel per clip kind (visual→opacity, audio→volume), or add `audioFadeIn/Out`. *Gap noted in `PROPERTY_MODEL.md §2.5`.* Wire in `audio.ts reconcile()`.
+- [x] **Audio-aware `set_fade`** — extracted `fadeGain()` (`src/model/fades.ts`); applied to opacity (visual), audio-clip volume (`audio.ts`), and a video clip's own sound (`PreviewVideo`). One tool fades any clip kind. Envelope math verified.
 - [x] **`set_color`** — brightness/contrast/saturation/hue + named filter presets (grayscale/sepia/invert/vintage). `Clip.color` → CSS `filter` on the media element in `PreviewCanvas`. Filter-string math verified. *(temp/tint/exposure/LUT still ➕)*
 - [ ] **`set_pan`** — stereo pan via Web Audio `StereoPannerNode` in `audio.ts` (`el.volume` path is mono today). *(§2.5)*
 - [x] **Extended typography** on `set_text` — `fontWeight`, `italic`, `letterSpacing`, `backgroundColor` (plate), `strokeColor`/`strokeWidth`. Rendered in `PreviewCanvas`. *(configurable text shadow + vertical-align still ➕)*

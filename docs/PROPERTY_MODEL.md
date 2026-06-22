@@ -87,10 +87,10 @@ Core grade + named looks ship via the **`set_color`** command + tool (✅), appl
 |---|---|---|---|---|
 | `volume` | Clip gain | 0..1 (≈ −∞..0 dB) | ✅ | `set_volume` |
 | `mute` | Silence without losing the level | bool | ⚠️ (do via `volume:0` today) | `set_volume` |
-| `audioFadeIn` / `audioFadeOut` | **Volume** fades | seconds | ➕ **gap**: `set_fade` only does *opacity* fades; audio clips have no fade today | `set_fade{audio}` (proposed) |
+| fade in/out | **Volume** fades | seconds | ✅ `set_fade` is channel-aware (volume for audio, opacity for visual) | `set_fade` |
 | `pan` | Stereo placement | −1 (L) .. 1 (R) | ➕ | `set_pan` (proposed) |
 
-> **Note the fade gap.** `set_fade` writes `opacityFadeIn/Out` (visual). On an audio clip that does nothing audible. A real editor fades *volume*. Either generalize `set_fade` to fade the natural channel per clip kind, or add explicit audio fades. Tracked in the roadmap.
+> **Fade is one envelope, two channels.** `set_fade` stores a duration in `opacityFadeIn/Out`; the renderer applies it as opacity on visual clips and as volume on audio clips (and a video clip's own sound) via the shared `fadeGain()` helper (`src/model/fades.ts`). So "fade out the music" and "fade in the title" are the same tool.
 
 ### 2.6 Typography — *text styling* (text clips only)
 See `TextProps` (`types.ts:69`).
