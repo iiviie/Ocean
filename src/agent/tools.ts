@@ -182,6 +182,27 @@ export const tools: Record<string, ToolDef> = {
     },
   },
 
+  // ---------- batch ----------
+  batch: {
+    name: "batch",
+    description: "Run several tool calls in ONE request — saves round-trips and tokens. Args: ops:[{tool, args}]. Runs in order, best-effort (continues past failures); returns per-op {ok, tool, result|error}. Use for repetitive edits like deleting/moving/styling many clips. Cannot nest batch in batch.",
+    run: async (a) => {
+      const ops = (a.ops as { tool: string; args?: Record<string, unknown> }[]) ?? [];
+      const results: unknown[] = [];
+      for (const op of ops) {
+        if (!op || typeof op.tool !== "string") { results.push({ ok: false, error: "each op needs a 'tool' string" }); continue; }
+        if (op.tool === "batch") { results.push({ ok: false, tool: "batch", error: "cannot nest batch" }); continue; }
+        try {
+          results.push({ ok: true, tool: op.tool, result: await runTool(op.tool, op.args ?? {}) });
+        } catch (e) {
+          results.push({ ok: false, tool: op.tool, error: e instanceof Error ? e.message : String(e) });
+        }
+      }
+      const failed = results.filter((r) => !(r as { ok: boolean }).ok).length;
+      return { count: results.length, failed, results };
+    },
+  },
+
   // ---------- perception (media → text) ----------
   analyze_media: {
     name: "analyze_media",
