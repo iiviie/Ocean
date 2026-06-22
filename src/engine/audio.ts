@@ -7,10 +7,10 @@
 // a shared audio clock driving video) is a later milestone. Best-effort and
 // defensive — failures here never break the video preview.
 import { useEffect, useRef } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { useStore } from "@/model/store";
 import { ticksToSeconds } from "@/model/time";
-import { inTauri, resolveAssetPath } from "@/engine/render";
+import { fadeGain } from "@/model/fades";
+import { inElectron, mediaUrl } from "@/engine/render";
 import type { Project } from "@/model/types";
 
 interface Audible {
@@ -21,28 +21,31 @@ interface Audible {
   sourceInTicks: number;
   speed: number;
   vol: number;
+  fadeIn: number;
+  fadeOut: number;
 }
 
 function collectAudible(project: Project): Audible[] {
   const out: Audible[] = [];
   for (const track of project.tracks) {
     if (!track.enabled) continue;
-    const isAudio = track.kind === "audio";
-    const isVideo = track.kind === "video";
-    if (!isAudio && !isVideo) continue;
+    // Only audio tracks here — video clips carry their own audio via the
+    // <video> elements in the preview, so including them would double-play.
+    if (track.kind !== "audio") continue;
     for (const clip of track.clips) {
       if (!clip.assetId) continue;
       const asset = project.mediaLibrary.find((a) => a.id === clip.assetId);
       if (!asset || asset.missing) continue;
-      if (isVideo && !asset.hasAudio) continue;
       out.push({
         clipId: clip.id,
-        path: resolveAssetPath(asset.uri),
+        path: mediaUrl(asset.uri),
         startTicks: clip.timelineStart,
         endTicks: clip.timelineEnd,
         sourceInTicks: clip.sourceIn,
         speed: clip.speed || 1,
         vol: Math.max(0, Math.min(1, (clip.volume ?? 1) * (track.volume ?? 1))),
+        fadeIn: clip.opacityFadeIn,
+        fadeOut: clip.opacityFadeOut,
       });
     }
   }
@@ -53,7 +56,7 @@ export function useAudioPlayback(): void {
   const els = useRef<Map<string, HTMLAudioElement>>(new Map());
 
   useEffect(() => {
-    if (!inTauri) return;
+    if (!inElectron) return;
     const elements = els.current;
 
     const reconcile = () => {
@@ -68,14 +71,10 @@ export function useAudioPlayback(): void {
         if (!el) {
           el = new Audio();
           el.preload = "auto";
-          try {
-            el.src = convertFileSrc(c.path);
-          } catch {
-            /* ignore unresolvable src */
-          }
+          el.src = c.path;
           elements.set(c.clipId, el);
         }
-        el.volume = c.vol;
+        el.volume = c.vol * fadeGain(t, c.startTicks, c.endTicks, c.fadeIn, c.fadeOut);
         el.playbackRate = c.speed;
         const active = playing && t >= c.startTicks && t < c.endTicks;
         if (active) {

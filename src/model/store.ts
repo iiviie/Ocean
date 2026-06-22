@@ -36,7 +36,29 @@ let seq = 0;
 
 // High-frequency / ephemeral commands that should NOT pollute the command log
 // (they fire continuously during drags & playback and would saturate the UI).
-const TRANSIENT = new Set<Command["type"]>(["set_playhead", "set_zoom", "set_working"]);
+const TRANSIENT = new Set<Command["type"]>([
+  "set_playhead",
+  "set_zoom",
+  "set_working",
+  "select_clips",
+  "select_asset",
+  "set_range",
+  "set_playing",
+]);
+
+// Continuous edits: fire rapidly during UI drags (move/trim/sliders). We log
+// them when an agent issues them (discrete tool calls), but not during a human
+// drag, where intermediate values would flood the log.
+const CONTINUOUS = new Set<Command["type"]>([
+  "move_clip",
+  "trim_clip",
+  "set_transform",
+  "set_opacity",
+  "set_volume",
+  "set_text",
+  "set_fade",
+  "set_speed",
+]);
 
 export const useStore = create<OceanStore>((set) => ({
   project: createEmptyProject(),
@@ -53,8 +75,9 @@ export const useStore = create<OceanStore>((set) => ({
         } catch (e) {
           error = e instanceof Error ? e.message : String(e);
         }
-        // Skip transient high-frequency commands unless they errored.
-        if (error || !TRANSIENT.has(cmd.type)) {
+        // Skip transient commands, and continuous edits during a human drag.
+        const skip = TRANSIENT.has(cmd.type) || (source === "ui" && CONTINUOUS.has(cmd.type));
+        if (error || !skip) {
           draft.log.push({ seq: ++seq, source, command: cmd, diff, error, at: Date.now() });
           if (draft.log.length > 200) draft.log.splice(0, draft.log.length - 200);
         }

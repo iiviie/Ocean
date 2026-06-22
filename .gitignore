@@ -11,3 +11,4 @@ src-tauri/gen/
 Thumbs.db
 .env
 .env.local
+out/

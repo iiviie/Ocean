@@ -3,7 +3,10 @@
 import type { Ticks } from "./time";
 
 export type MediaKind = "video" | "image" | "audio" | "lottie";
-export type TrackKind = "video" | "audio" | "text";
+// Only two layer kinds: video (carries visuals — media + text overlays) and
+// audio. Text is no longer its own track; a text clip is just a clip with
+// `text` set living on a video track (PRD §6.3 — layers, not clip taxonomies).
+export type TrackKind = "video" | "audio";
 
 /** Identity used as a cache key for analysis artifacts (PRD §8.4). */
 export interface FileIdentity {
@@ -31,11 +34,16 @@ export interface MediaAsset {
   naturalHeight: number;
   hasAudio: boolean;
   colorInfo?: ColorInfo;
-  /** Lazy, cached analysis handles (resolved by tools, not stored inline). */
+  /** Lazy, cached analysis handles (resolved by tools, not stored inline).
+   *  Each ref is the fileIdentity hash that keys the out-of-band analysis cache;
+   *  the heavy artifact (shots/transcript/beats) never lives in the document.
+   *  See PERCEPTION_LAYER §1. */
   analysis?: {
-    beatsRef?: string;
+    shotsRef?: string;
     transcriptRef?: string;
+    beatsRef?: string;
     storyboardRef?: string;
+    analyzedAt?: number; // epoch ms of the most recent analysis write
   };
   missing?: boolean; // surfaced in UI rather than failing silently (PRD §5.3)
 }
@@ -61,6 +69,32 @@ export const defaultTransform = (): Transform => ({
   flipV: false,
 });
 
+/** Named one-shot color "looks" — higher conversational value for an agent than
+ *  raw sliders (PROPERTY_MODEL §2.4 / appendix). */
+export type FilterPreset = "none" | "grayscale" | "sepia" | "invert" | "vintage";
+
+/** Color correction for video/image clips. All fields optional; absent = neutral. */
+export interface ColorAdjust {
+  brightness?: number; // -1..1, 0 = none
+  contrast?: number; // -1..1, 0 = none
+  saturation?: number; // 0..2, 1 = none
+  hue?: number; // degrees, -180..180
+  filter?: FilterPreset;
+}
+
+export type BlendMode =
+  | "normal" | "multiply" | "screen" | "overlay"
+  | "darken" | "lighten" | "difference" | "add";
+
+/** Appearance / compositing for a visual clip. All fields optional. */
+export interface ClipStyle {
+  blendMode?: BlendMode;
+  cornerRadius?: number; // 0..1 fraction of the smaller side (1 = pill)
+  borderColor?: string;
+  borderWidth?: number; // px in canvas space
+  shadow?: boolean; // tasteful drop shadow
+}
+
 export type TextAlign = "left" | "center" | "right";
 
 export interface TextProps {
@@ -70,6 +104,13 @@ export interface TextProps {
   color: string;
   align: TextAlign;
   lineHeight: number;
+  // extended styling (all optional; absent = sensible default)
+  fontWeight?: number; // 100..900
+  italic?: boolean;
+  letterSpacing?: number; // px in canvas space
+  backgroundColor?: string; // text box plate (e.g. lower-third)
+  strokeColor?: string; // outline color
+  strokeWidth?: number; // outline width, px in canvas space
 }
 
 export const defaultTextProps = (content = "Text"): TextProps => ({
@@ -108,6 +149,8 @@ export interface Clip {
   sourceOut: Ticks;
   speed: number; // 1 = normal
   transform: Transform;
+  color?: ColorAdjust; // color correction (video/image); absent = neutral
+  style?: ClipStyle; // appearance/compositing (blend, radius, border, shadow)
   opacity: number; // 0..1
   opacityFadeIn: Ticks;
   opacityFadeOut: Ticks;
@@ -115,6 +158,10 @@ export interface Clip {
   text?: TextProps;
   keyframes: Keyframe[];
   label?: string; // short human/agent mention name
+  /** When a video clip carries audio, its sound is split onto a linked audio
+   *  clip directly beneath it. Both clips point at each other and move/delete
+   *  together until unlinked (right-click → Unlink). */
+  linkedClipId?: string;
 }
 
 export interface Track {

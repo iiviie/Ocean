@@ -18,6 +18,17 @@ export function findClip(project: Project, clipId: string): { track: Track; clip
   return null;
 }
 
+/** A non-overlapping start at/after `atTicks` for a clip of `durTicks` on
+ *  `track`. Used when dropping media so a drop onto an occupied region snaps
+ *  into the next free slot instead of overlapping (clips share one lane). */
+export function freeStartFor(track: Track, atTicks: Ticks, durTicks: Ticks): Ticks {
+  let start = Math.max(0, atTicks);
+  for (const c of [...track.clips].sort((a, b) => a.timelineStart - b.timelineStart)) {
+    if (start < c.timelineEnd && start + durTicks > c.timelineStart) start = c.timelineEnd;
+  }
+  return start;
+}
+
 export function clipsAt(project: Project, atTicks: Ticks): { track: Track; clip: Clip }[] {
   const out: { track: Track; clip: Clip }[] = [];
   for (const track of project.tracks) {
@@ -65,7 +76,7 @@ export function canvasLayoutAt(project: Project, atTicks: Ticks): LayoutBox[] {
       const h = (natH * fit * clip.transform.scale) / ch;
       boxes.push({
         clipId: clip.id,
-        kind: clip.kind,
+        kind: clip.text ? "text" : clip.kind,
         centerX: clip.transform.centerX,
         centerY: clip.transform.centerY,
         width: Math.min(2, w),

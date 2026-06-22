@@ -1,13 +1,35 @@
-// Frontend bridge to the native Rust compositor (Tauri command `render_frame`).
-// Only active in the desktop app; in a plain browser there's no engine, so the
-// preview falls back to the lightweight DOM compositor.
-import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { useStore } from "@/model/store";
-import { ticksToSeconds } from "@/model/time";
+// Renderer-side bridge to the Electron native layer (preload `window.oceanNative`).
+// Preview now composites native <video>/<img> in the renderer (see PreviewCanvas),
+// so there's no per-frame IPC. This module just resolves media URLs and proxies
+// import/probe to the main process.
+export interface ProbeInfo {
+  kind: string;
+  width: number;
+  height: number;
+  durationSecs: number;
+  hasAudio: boolean;
+  fileIdentity?: { hash: string; size: number; mtime: number };
+}
 
-export const inTauri =
-  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+interface OceanNative {
+  isElectron: boolean;
+  ping(): Promise<string>;
+  probeMedia(path: string): Promise<ProbeInfo>;
+  importDialog(): Promise<({ path: string; name: string } & ProbeInfo) | null>;
+  analyzeMedia(hash: string, path: string, kinds: string[], opts: { durationSec: number }): Promise<Record<string, string>>;
+  analysisStatus(hash: string, kinds: string[]): Promise<Record<string, string>>;
+  readAnalysis(hash: string, kind: string): Promise<unknown | null>;
+  extractFrame(path: string, atSec: number, maxPx: number): Promise<string>;
+}
+
+declare global {
+  interface Window {
+    oceanNative?: OceanNative;
+  }
+}
+
+export const native = (): OceanNative | undefined => window.oceanNative;
+export const inElectron = typeof window !== "undefined" && !!window.oceanNative;
 
 // Where asset:// URIs resolve in dev. Set VITE_MEDIA_ROOT to your test-media dir.
 const MEDIA_ROOT = (import.meta.env.VITE_MEDIA_ROOT as string) ?? "";
@@ -19,72 +41,36 @@ export function resolveAssetPath(uri: string): string {
   return uri;
 }
 
-export async function renderFrame(tSecs: number, maxDim = 720): Promise<string> {
-  const project = useStore.getState().project;
-  return invoke<string>("render_frame", {
-    projectJson: JSON.stringify(project),
-    tSecs,
-    mediaRoot: MEDIA_ROOT,
-    maxDim,
-  });
+/** A URL the renderer can load (<video>/<img>/<audio>). */
+export function mediaUrl(uri: string): string {
+  if (uri.startsWith("blob:") || uri.startsWith("data:") || uri.startsWith("http")) return uri;
+  const path = resolveAssetPath(uri);
+  if (inElectron) return `ocean-media://media${encodeURI(path)}`;
+  // Browser dev fallback: not servable; return as-is (won't load local files).
+  return path;
 }
 
-/** Warm the decode cache ahead of the playhead so playback can pull frames fast. */
-export async function prefetch(fromSec: number, toSec: number): Promise<number> {
-  if (!inTauri) return 0;
-  try {
-    return await invoke<number>("prefetch", {
-      projectJson: JSON.stringify(useStore.getState().project),
-      fromSec,
-      toSec,
-      mediaRoot: MEDIA_ROOT,
-    });
-  } catch {
-    return 0;
-  }
+export async function probeMedia(path: string) {
+  return native()?.probeMedia(path);
 }
 
-/** Returns the latest real rendered frame for the current playhead/project.
- *  Debounced, and only the newest request wins (older renders are discarded). */
-export function useRenderedFrame(): { src: string | null; loading: boolean; error: string | null } {
-  const playhead = useStore((s) => s.editor.playheadTicks);
-  const modifiedAt = useStore((s) => s.project.modifiedAt); // bumps on every edit
-  const playing = useStore((s) => s.editor.playing);
-  const [src, setSrc] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const reqId = useRef(0);
+export async function importDialog() {
+  return native()?.importDialog() ?? null;
+}
 
-  // Prefetch a window into the cache when playback starts so frames pull fast.
-  useEffect(() => {
-    if (!inTauri || !playing) return;
-    const from = ticksToSeconds(useStore.getState().editor.playheadTicks);
-    void prefetch(from, from + 3);
-  }, [playing]);
+// ---- perception analysis bridge (desktop only) ----
+export async function analyzeMedia(hash: string, path: string, kinds: string[], durationSec: number) {
+  return native()?.analyzeMedia(hash, path, kinds, { durationSec }) ?? null;
+}
 
-  useEffect(() => {
-    if (!inTauri) return;
-    const tSecs = ticksToSeconds(playhead);
-    const id = ++reqId.current;
-    // While playing, render back-to-back (latest-wins) for preview-rate playback;
-    // while paused/scrubbing, debounce so we don't render every intermediate value.
-    const delay = playing ? 0 : 120;
-    const handle = setTimeout(async () => {
-      setLoading(true);
-      try {
-        const url = await renderFrame(tSecs, playing ? 540 : 720);
-        if (id === reqId.current) {
-          setSrc(url);
-          setError(null);
-        }
-      } catch (e) {
-        if (id === reqId.current) setError(e instanceof Error ? e.message : String(e));
-      } finally {
-        if (id === reqId.current) setLoading(false);
-      }
-    }, delay);
-    return () => clearTimeout(handle);
-  }, [playhead, modifiedAt, playing]);
+export async function analysisStatus(hash: string, kinds: string[]) {
+  return native()?.analysisStatus(hash, kinds) ?? null;
+}
 
-  return { src, loading, error };
+export async function readAnalysis(hash: string, kind: string) {
+  return native()?.readAnalysis(hash, kind) ?? null;
+}
+
+export async function extractFrame(path: string, atSec: number, maxPx = 512) {
+  return native()?.extractFrame(path, atSec, maxPx) ?? null;
 }

@@ -1,9 +1,10 @@
-// Ocean MCP server.
+// Ocean MCP server (adapter).
 //
 // Runs under Bun. Speaks MCP over stdio (so Claude Code / Cursor / Claude Desktop
-// can spawn it) and bridges every tool call to the running Ocean UI over a local
-// WebSocket. The UI executes the call through its command bus and returns a
-// compact result — which means every edit the agent makes is visible in the UI.
+// can spawn it) and forwards every tool call to the Ocean UI through the shared
+// broker (mcp/bridge.ts). The adapter is a WebSocket *client* of the broker, NOT
+// a server — so any number of adapters can run at once and drive the one UI
+// concurrently. The broker is auto-spawned on demand if it isn't already up.
 //
 // IMPORTANT: stdout is reserved for the MCP JSON-RPC stream. All logging goes to
 // stderr via console.error.
@@ -13,64 +14,96 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import type { ServerWebSocket } from "bun";
 
 const PORT = Number(process.env.OCEAN_PORT ?? 7331);
+const BRIDGE_URL = `ws://127.0.0.1:${PORT}`;
+const BRIDGE_PATH = new URL("./bridge.ts", import.meta.url).pathname;
 
-// ---------- UI WebSocket bridge ----------
-let uiSocket: ServerWebSocket<unknown> | null = null;
+// ---------- bridge client (connects to the singleton broker) ----------
+let bridgeWs: WebSocket | null = null;
+let spawnedBroker = false;
+let reconnecting = false;
 const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
 
-Bun.serve({
-  port: PORT,
-  hostname: "127.0.0.1",
-  fetch(req, server) {
-    if (server.upgrade(req)) return;
-    return new Response("Ocean MCP bridge");
-  },
-  websocket: {
-    open(ws) {
-      uiSocket = ws;
-      console.error("[ocean-mcp] UI connected");
-    },
-    close() {
-      uiSocket = null;
-      console.error("[ocean-mcp] UI disconnected");
-    },
-    message(_ws, raw) {
-      let msg: { type: string; id?: string; ok?: boolean; data?: unknown; error?: string };
-      try {
-        msg = JSON.parse(String(raw));
-      } catch {
-        return;
-      }
-      if (msg.type === "result" && msg.id) {
-        const p = pending.get(msg.id);
-        if (!p) return;
-        clearTimeout(p.timer);
-        pending.delete(msg.id);
-        if (msg.ok) p.resolve(msg.data);
-        else p.reject(new Error(msg.error ?? "tool failed in UI"));
-      }
-    },
-  },
-});
-console.error(`[ocean-mcp] bridge listening on ws://127.0.0.1:${PORT}/ui`);
+function handleBridgeMessage(raw: string): void {
+  let msg: { type: string; id?: string; ok?: boolean; data?: unknown; error?: string };
+  try { msg = JSON.parse(raw); } catch { return; }
+  if (msg.type === "result" && msg.id) {
+    const p = pending.get(msg.id);
+    if (!p) return;
+    clearTimeout(p.timer);
+    pending.delete(msg.id);
+    if (msg.ok) p.resolve(msg.data);
+    else p.reject(new Error(msg.error ?? "tool failed in UI"));
+  }
+}
 
-function invokeUI(tool: string, args: Record<string, unknown>): Promise<unknown> {
-  if (!uiSocket) {
-    return Promise.reject(
-      new Error("Ocean UI is not connected. Launch it with `pnpm dev` (http://localhost:5173) or `pnpm tauri:dev`, then retry."),
-    );
+function spawnBroker(): void {
+  if (spawnedBroker) return;
+  spawnedBroker = true; // only ever try once per process; broker is idempotent
+  try {
+    Bun.spawn(["bun", BRIDGE_PATH], { stdin: "ignore", stdout: "ignore", stderr: "ignore" }).unref();
+    console.error("[ocean-mcp] spawned bridge broker");
+  } catch (e) {
+    console.error("[ocean-mcp] failed to spawn broker:", e);
+  }
+}
+
+function connectOnce(): Promise<boolean> {
+  return new Promise((resolve) => {
+    let ws: WebSocket;
+    try { ws = new WebSocket(BRIDGE_URL); } catch { resolve(false); return; }
+    const to = setTimeout(() => { try { ws.close(); } catch { /* noop */ } resolve(false); }, 1000);
+    ws.onopen = () => {
+      clearTimeout(to);
+      ws.send(JSON.stringify({ type: "hello", role: "agent" }));
+      bridgeWs = ws;
+      console.error("[ocean-mcp] connected to bridge");
+      resolve(true);
+    };
+    ws.onmessage = (ev) => handleBridgeMessage(String(ev.data));
+    ws.onclose = () => {
+      if (bridgeWs !== ws) return;
+      bridgeWs = null;
+      // Fail any in-flight calls fast rather than waiting out their 10s timeout.
+      for (const [, p] of pending) { clearTimeout(p.timer); p.reject(new Error("bridge connection lost")); }
+      pending.clear();
+      setTimeout(() => ensureConnected().catch(() => {}), 500);
+    };
+    ws.onerror = () => { clearTimeout(to); try { ws.close(); } catch { /* noop */ } resolve(false); };
+  });
+}
+
+async function ensureConnected(): Promise<void> {
+  if (bridgeWs && bridgeWs.readyState === WebSocket.OPEN) return;
+  if (reconnecting) return;
+  reconnecting = true;
+  try {
+    for (let attempt = 0; attempt < 40; attempt++) {
+      if (bridgeWs && bridgeWs.readyState === WebSocket.OPEN) break;
+      if (await connectOnce()) break;
+      if (attempt === 0) spawnBroker(); // broker absent → start it once, then keep retrying to connect
+      await Bun.sleep(150);
+    }
+  } finally {
+    reconnecting = false;
+  }
+}
+
+async function invokeUI(tool: string, args: Record<string, unknown>): Promise<unknown> {
+  await ensureConnected();
+  if (!bridgeWs || bridgeWs.readyState !== WebSocket.OPEN) {
+    throw new Error("Ocean bridge unavailable. Is the app running? (pnpm dev / pnpm electron:dev)");
   }
   const id = crypto.randomUUID();
+  const ws = bridgeWs;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
       reject(new Error(`tool '${tool}' timed out after 10s`));
     }, 10_000);
     pending.set(id, { resolve, reject, timer });
-    uiSocket!.send(JSON.stringify({ type: "invoke", id, tool, args }));
+    ws.send(JSON.stringify({ type: "invoke", id, tool, args }));
   });
 }
 
@@ -85,24 +118,37 @@ const TOOLS = [
   { name: "get_project", description: "Project facts: canvas size, fps, duration, track/asset counts.", inputSchema: obj({}) },
   { name: "list_media", description: "List media library assets (id, kind, name, duration, dimensions).", inputSchema: obj({}) },
   { name: "get_timeline", description: "Windowed timeline view (never dumps the whole project). Times in seconds.", inputSchema: obj({ fromSec: S.num, toSec: S.num, trackIds: S.strArr }) },
-  { name: "get_canvas_layout", description: "Spatial awareness at a time: each visible object's MEASURED normalized box + overlap warnings (true geometry from the compositor in the desktop app).", inputSchema: obj({ atSec: S.num }, ["atSec"]) },
-  { name: "capture_frame", description: "Render and SEE the actual composited frame at a time (downscaled image). Costs image tokens — use sparingly to verify a result, not to browse. Desktop app only.", inputSchema: obj({ atSec: S.num, maxDim: S.num }, ["atSec"]) },
+  { name: "get_canvas_layout", description: "Spatial awareness at a time: each visible object's normalized box + overlap warnings.", inputSchema: obj({ atSec: S.num }, ["atSec"]) },
   { name: "get_selection", description: "What the human currently has selected in the UI (clips, asset, range, playhead).", inputSchema: obj({}) },
   { name: "recent", description: "Recent command log so you can verify the effect of your own edits.", inputSchema: obj({ n: S.num }) },
+  { name: "batch", description: "Run several tool calls in ONE request (saves round-trips/tokens). ops:[{tool, args}]. Runs in order, best-effort; returns per-op {ok, tool, result|error}. Use for repetitive edits (delete/move/style many clips). No nesting.", inputSchema: obj({ ops: { type: "array", items: obj({ tool: S.str, args: { type: "object" } }, ["tool"]) } }, ["ops"]) },
   { name: "import_media", description: "Import a media file from an absolute path into the library (probes real metadata). Returns { assetId, kind, dur }.", inputSchema: obj({ path: S.str }, ["path"]) },
-  { name: "add_track", description: "Add a track. Returns { trackId }.", inputSchema: obj({ kind: { type: "string", enum: ["video", "audio", "text"] }, name: S.str }, ["kind"]) },
+  { name: "analyze_media", description: "Kick off perception analysis for an asset (async, non-blocking). Default kinds ['shots','silence']; also 'transcript'. Poll get_analysis_status / read with get_shots/get_silence/get_transcript. Desktop app only.", inputSchema: obj({ assetId: S.str, kinds: S.strArr }, ["assetId"]) },
+  { name: "get_analysis_status", description: "Per-kind analysis status for an asset: ready | pending | none | unavailable | unsupported.", inputSchema: obj({ assetId: S.str, kinds: S.strArr }, ["assetId"]) },
+  { name: "get_media_summary", description: "Cheap one-shot overview of an asset: kind, duration, audio, dimensions, and which analyses are ready (shots/silence/transcript counts or status). Start here before pulling detail.", inputSchema: obj({ assetId: S.str }, ["assetId"]) },
+  { name: "get_shots", description: "Windowed shot list for a video asset (idx, start, end, dur seconds). Returns { status } if not analyzed yet — call analyze_media first.", inputSchema: obj({ assetId: S.str, fromSec: S.num, toSec: S.num }, ["assetId"]) },
+  { name: "get_silence", description: "Silent/low-audio spans (start, end, dur seconds — gaps & dead air, good cut points). Returns { status } if not analyzed — run analyze_media kinds:['silence'].", inputSchema: obj({ assetId: S.str, fromSec: S.num, toSec: S.num }, ["assetId"]) },
+  { name: "get_transcript", description: "Windowed speech transcript (segments: id, start, end, text seconds). Returns { status } if not ready ('unavailable' = no speech-to-text backend installed). Run analyze_media kinds:['transcript'] first.", inputSchema: obj({ assetId: S.str, fromSec: S.num, toSec: S.num }, ["assetId"]) },
+  { name: "get_frame", description: "Render one frame of a source asset at a time as an image the model can see (<=512px). Use sparingly — the text tools are far cheaper. Desktop app only.", inputSchema: obj({ assetId: S.str, atSec: S.num, maxPx: S.num }, ["assetId", "atSec"]) },
+  { name: "add_track", description: "Add a track/layer ('video'|'audio'). Text overlays live on video tracks — no separate text track. Returns { trackId }.", inputSchema: obj({ kind: { type: "string", enum: ["video", "audio"] }, name: S.str }, ["kind"]) },
   { name: "remove_track", description: "Remove a track by id.", inputSchema: obj({ trackId: S.str }, ["trackId"]) },
-  { name: "add_clip", description: "Place a clip on a track. For text tracks pass `text`. Returns { clipId }.", inputSchema: obj({ trackId: S.str, assetId: S.str, atSec: S.num, durationSec: S.num, text: S.str }, ["trackId", "atSec"]) },
+  { name: "set_track", description: "Set track/lane properties: name, enabled (false hides a video lane / mutes an audio lane), locked, opacity (0..1, video lanes), volume (0..1, audio lanes).", inputSchema: obj({ trackId: S.str, name: S.str, enabled: S.bool, locked: S.bool, opacity: S.num, volume: S.num }, ["trackId"]) },
+  { name: "move_track", description: "Reorder a track/layer. toIndex 0 = bottom layer; higher index composites on top.", inputSchema: obj({ trackId: S.str, toIndex: S.num }, ["trackId", "toIndex"]) },
+  { name: "add_clip", description: "Place a clip on a track. Pass `text` for a text overlay (goes on a video track). A video with audio auto-creates a linked audio clip on the lane beneath. Clips can't overlap on a lane. Returns { clipId }.", inputSchema: obj({ trackId: S.str, assetId: S.str, atSec: S.num, durationSec: S.num, text: S.str }, ["trackId", "atSec"]) },
   { name: "move_clip", description: "Move a clip on the timeline and/or to another track.", inputSchema: obj({ clipId: S.str, toSec: S.num, toTrackId: S.str }, ["clipId", "toSec"]) },
   { name: "trim_clip", description: "Trim a clip's source in/out range (seconds).", inputSchema: obj({ clipId: S.str, sourceInSec: S.num, sourceOutSec: S.num }, ["clipId"]) },
   { name: "split_clip", description: "Split (razor) a clip at a time. Returns { newClipId }.", inputSchema: obj({ clipId: S.str, atSec: S.num }, ["clipId", "atSec"]) },
-  { name: "delete_clip", description: "Delete a clip; ripple closes the gap.", inputSchema: obj({ clipId: S.str, ripple: S.bool }, ["clipId"]) },
-  { name: "set_transform", description: "Set clip transform (center-anchored, normalized 0..1; rotation in degrees).", inputSchema: obj({ clipId: S.str, centerX: S.num, centerY: S.num, scale: S.num, rotation: S.num, flipH: S.bool, flipV: S.bool }, ["clipId"]) },
-  { name: "set_text", description: "Edit a text clip's content/font/size/color/align.", inputSchema: obj({ clipId: S.str, content: S.str, fontName: S.str, fontSize: S.num, color: S.str, align: { type: "string", enum: ["left", "center", "right"] } }, ["clipId"]) },
-  { name: "set_opacity", description: "Set clip opacity 0..1.", inputSchema: obj({ clipId: S.str, opacity: S.num }, ["clipId", "opacity"]) },
-  { name: "set_fade", description: "Set opacity fade in/out (seconds).", inputSchema: obj({ clipId: S.str, fadeInSec: S.num, fadeOutSec: S.num }, ["clipId"]) },
-  { name: "set_volume", description: "Set clip volume 0..1.", inputSchema: obj({ clipId: S.str, volume: S.num }, ["clipId", "volume"]) },
-  { name: "set_speed", description: "Retime a clip (2 = 2x faster).", inputSchema: obj({ clipId: S.str, speed: S.num }, ["clipId", "speed"]) },
+  { name: "delete_clip", description: "Delete clip(s) (and any linked partner); ripple closes the gap. Pass clipId OR clipIds[] (e.g. ['c1','c2','c3']).", inputSchema: obj({ clipId: S.str, clipIds: S.strArr, ripple: S.bool }) },
+  { name: "unlink_clip", description: "Unlink a video clip from its auto-created audio clip so they move independently.", inputSchema: obj({ clipId: S.str }, ["clipId"]) },
+  { name: "set_transform", description: "Set clip(s) transform (center-anchored, normalized 0..1; rotation in degrees). clipId OR clipIds[].", inputSchema: obj({ clipId: S.str, clipIds: S.strArr, centerX: S.num, centerY: S.num, scale: S.num, rotation: S.num, flipH: S.bool, flipV: S.bool }) },
+  { name: "set_text", description: "Edit a text clip: content/font/size/color/align/lineHeight + fontWeight (100-900), italic, letterSpacing (px), backgroundColor (plate), strokeColor, strokeWidth (px).", inputSchema: obj({ clipId: S.str, clipIds: S.strArr, content: S.str, fontName: S.str, fontSize: S.num, color: S.str, align: { type: "string", enum: ["left", "center", "right"] }, lineHeight: S.num, fontWeight: S.num, italic: S.bool, letterSpacing: S.num, backgroundColor: S.str, strokeColor: S.str, strokeWidth: S.num }) },
+  { name: "set_color", description: "Color-correct a video/image clip: brightness/contrast (-1..1, 0=none), saturation (0..2, 1=none), hue (deg), filter preset (none|grayscale|sepia|invert|vintage).", inputSchema: obj({ clipId: S.str, clipIds: S.strArr, brightness: S.num, contrast: S.num, saturation: S.num, hue: S.num, filter: { type: "string", enum: ["none", "grayscale", "sepia", "invert", "vintage"] } }) },
+  { name: "set_style", description: "Visual clip appearance/compositing: blendMode (normal|multiply|screen|overlay|darken|lighten|difference|add), cornerRadius (0..1), borderColor, borderWidth (px), shadow (bool).", inputSchema: obj({ clipId: S.str, clipIds: S.strArr, blendMode: { type: "string", enum: ["normal", "multiply", "screen", "overlay", "darken", "lighten", "difference", "add"] }, cornerRadius: S.num, borderColor: S.str, borderWidth: S.num, shadow: S.bool }) },
+  { name: "set_opacity", description: "Set clip(s) opacity 0..1. clipId OR clipIds[].", inputSchema: obj({ clipId: S.str, clipIds: S.strArr, opacity: S.num }, ["opacity"]) },
+  { name: "set_fade", description: "Fade clip(s) in/out (seconds) — opacity for visual clips, volume for audio clips. clipId OR clipIds[].", inputSchema: obj({ clipId: S.str, clipIds: S.strArr, fadeInSec: S.num, fadeOutSec: S.num }) },
+  { name: "set_volume", description: "Set clip(s) volume 0..1. clipId OR clipIds[].", inputSchema: obj({ clipId: S.str, clipIds: S.strArr, volume: S.num }, ["volume"]) },
+  { name: "set_speed", description: "Retime clip(s) (2 = 2x faster). clipId OR clipIds[].", inputSchema: obj({ clipId: S.str, clipIds: S.strArr, speed: S.num }, ["speed"]) },
+  { name: "set_canvas", description: "Set canvas/output settings: width/height (px), fps (24|25|30|60), backgroundColor (hex).", inputSchema: obj({ width: S.num, height: S.num, fps: S.num, backgroundColor: S.str }) },
   { name: "add_marker", description: "Add a timeline marker (e.g. a beat).", inputSchema: obj({ atSec: S.num, kind: { type: "string", enum: ["beat", "downbeat", "chapter", "generic"] }, label: S.str }, ["atSec"]) },
   { name: "clear_markers", description: "Clear markers (omit kind to clear all).", inputSchema: obj({ kind: { type: "string", enum: ["beat", "downbeat", "chapter", "generic"] } }) },
   { name: "set_playhead", description: "Move the playhead (seconds).", inputSchema: obj({ atSec: S.num }, ["atSec"]) },
@@ -143,6 +189,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     return { content: [{ type: "text", text: e instanceof Error ? e.message : String(e) }], isError: true };
   }
 });
+
+// Warm the bridge up front (spawns the broker if needed) so the first tool call
+// doesn't pay the connect/spawn latency. Best-effort; tool calls re-ensure anyway.
+ensureConnected().catch(() => {});
 
 await server.connect(new StdioServerTransport());
 console.error("[ocean-mcp] MCP stdio server ready");

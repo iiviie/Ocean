@@ -22,3 +22,14 @@ export function formatTimecode(t: Ticks): string {
   const pad = (n: number, w = 2) => String(n).padStart(w, "0");
   return `${pad(m)}:${pad(s)}.${pad(cs)}`;
 }
+
+/** Format ticks as HH:MM:SS:FF (frames) — broadcast-style timecode. */
+export function formatTimecodeFrames(t: Ticks, fps: number): string {
+  const total = ticksToSeconds(t);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = Math.floor(total % 60);
+  const f = Math.floor((total - Math.floor(total)) * fps);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(h)}:${pad(m)}:${pad(s)}:${pad(f)}`;
+}
