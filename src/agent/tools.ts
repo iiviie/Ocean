@@ -410,7 +410,7 @@ export const tools: Record<string, ToolDef> = {
     },
   },
   set_opacity: { name: "set_opacity", description: "Set clip opacity 0..1. Args: clipId, opacity.", run: (a) => ({ diff: dispatch({ type: "set_opacity", clipId: a.clipId as string, opacity: a.opacity as number }) }) },
-  set_fade: { name: "set_fade", description: "Set opacity fades. Args: clipId, fadeInSec?, fadeOutSec?.", run: (a) => ({ diff: dispatch({ type: "set_fade", clipId: a.clipId as string, fadeInTicks: a.fadeInSec != null ? sec(a.fadeInSec as number) : undefined, fadeOutTicks: a.fadeOutSec != null ? sec(a.fadeOutSec as number) : undefined }) }) },
+  set_fade: { name: "set_fade", description: "Fade a clip in/out — opacity for visual clips, volume for audio clips. Args: clipId, fadeInSec?, fadeOutSec?.", run: (a) => ({ diff: dispatch({ type: "set_fade", clipId: a.clipId as string, fadeInTicks: a.fadeInSec != null ? sec(a.fadeInSec as number) : undefined, fadeOutTicks: a.fadeOutSec != null ? sec(a.fadeOutSec as number) : undefined }) }) },
   set_volume: { name: "set_volume", description: "Set clip volume 0..1. Args: clipId, volume.", run: (a) => ({ diff: dispatch({ type: "set_volume", clipId: a.clipId as string, volume: a.volume as number }) }) },
   set_speed: { name: "set_speed", description: "Retime a clip. Args: clipId, speed (e.g. 2 = 2x).", run: (a) => ({ diff: dispatch({ type: "set_speed", clipId: a.clipId as string, speed: a.speed as number }) }) },
 

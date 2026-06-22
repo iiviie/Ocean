@@ -9,6 +9,7 @@
 import { useEffect, useRef } from "react";
 import { useStore } from "@/model/store";
 import { ticksToSeconds } from "@/model/time";
+import { fadeGain } from "@/model/fades";
 import { inElectron, mediaUrl } from "@/engine/render";
 import type { Project } from "@/model/types";
 
@@ -20,6 +21,8 @@ interface Audible {
   sourceInTicks: number;
   speed: number;
   vol: number;
+  fadeIn: number;
+  fadeOut: number;
 }
 
 function collectAudible(project: Project): Audible[] {
@@ -41,6 +44,8 @@ function collectAudible(project: Project): Audible[] {
         sourceInTicks: clip.sourceIn,
         speed: clip.speed || 1,
         vol: Math.max(0, Math.min(1, (clip.volume ?? 1) * (track.volume ?? 1))),
+        fadeIn: clip.opacityFadeIn,
+        fadeOut: clip.opacityFadeOut,
       });
     }
   }
@@ -69,7 +74,7 @@ export function useAudioPlayback(): void {
           el.src = c.path;
           elements.set(c.clipId, el);
         }
-        el.volume = c.vol;
+        el.volume = c.vol * fadeGain(t, c.startTicks, c.endTicks, c.fadeIn, c.fadeOut);
         el.playbackRate = c.speed;
         const active = playing && t >= c.startTicks && t < c.endTicks;
         if (active) {

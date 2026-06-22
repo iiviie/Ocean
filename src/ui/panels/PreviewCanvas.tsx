@@ -3,6 +3,7 @@ import { Play, Pause, SkipBack } from "lucide-react";
 import { useStore } from "@/model/store";
 import { clipsAt, projectDurationTicks } from "@/model/selectors";
 import { formatTimecodeFrames, ticksToSeconds } from "@/model/time";
+import { fadeGain } from "@/model/fades";
 import type { Clip, ColorAdjust, MediaAsset } from "@/model/types";
 import { mediaUrl, inElectron } from "@/engine/render";
 import { useAudioPlayback } from "@/engine/audio";
@@ -135,12 +136,8 @@ function PreviewObject({ clip, stageW, stageH, canvasW }: { clip: Clip; stageW: 
   const playhead = useStore((s) => s.editor.playheadTicks);
   const tr = clip.transform;
 
-  // fade
-  const into = playhead - clip.timelineStart;
-  const toEnd = clip.timelineEnd - playhead;
-  let op = clip.opacity;
-  if (clip.opacityFadeIn > 0 && into < clip.opacityFadeIn) op *= Math.max(0, into / clip.opacityFadeIn);
-  if (clip.opacityFadeOut > 0 && toEnd < clip.opacityFadeOut) op *= Math.max(0, toEnd / clip.opacityFadeOut);
+  // fade envelope → opacity for visual clips
+  const op = clip.opacity * fadeGain(playhead, clip.timelineStart, clip.timelineEnd, clip.opacityFadeIn, clip.opacityFadeOut);
 
   const flip = `scaleX(${tr.flipH ? -1 : 1}) scaleY(${tr.flipV ? -1 : 1})`;
   const base = {
@@ -207,7 +204,8 @@ function PreviewVideo({ clip, asset, style }: { clip: Clip; asset: MediaAsset; s
     // When the clip's audio is split onto a linked audio clip, that clip plays
     // the sound — mute the video element to avoid double-play.
     v.muted = !!clip.linkedClipId;
-    v.volume = Math.max(0, Math.min(1, clip.volume));
+    // A video clip playing its own sound honors the same fade envelope as audio clips.
+    v.volume = Math.max(0, Math.min(1, clip.volume * fadeGain(playhead, clip.timelineStart, clip.timelineEnd, clip.opacityFadeIn, clip.opacityFadeOut)));
     if (playing) {
       if (Math.abs(v.currentTime - desired) > 0.25) v.currentTime = desired;
       if (v.paused) void v.play().catch(() => {});
