@@ -51,6 +51,8 @@ export type Command =
   | { type: "clear_markers"; kind?: "beat" | "downbeat" | "chapter" | "generic" }
   // ---- canvas ----
   | { type: "set_canvas"; patch: Partial<Project["canvas"]> }
+  // ---- perception (analysis handles on assets) ----
+  | { type: "set_asset_analysis"; assetId: string; patch: Partial<NonNullable<MediaAsset["analysis"]>> }
   // ---- ephemeral editor state (not part of the saved doc) ----
   | { type: "set_playhead"; atTicks: Ticks }
   | { type: "set_playing"; playing: boolean }
@@ -483,6 +485,13 @@ export function applyCommand(ctx: ApplyContext, cmd: Command): Diff {
     case "set_canvas": {
       Object.assign(project.canvas, cmd.patch);
       return `set canvas ${project.canvas.width}x${project.canvas.height}@${project.canvas.fps}`;
+    }
+
+    case "set_asset_analysis": {
+      const asset = project.mediaLibrary.find((a) => a.id === cmd.assetId);
+      if (!asset) throw new Error(`asset ${cmd.assetId} not found`);
+      asset.analysis = { ...asset.analysis, ...cmd.patch };
+      return `set analysis[${Object.keys(cmd.patch).join(",")}] on ${cmd.assetId}`;
     }
 
     // ----- ephemeral editor state -----

@@ -34,11 +34,16 @@ export interface MediaAsset {
   naturalHeight: number;
   hasAudio: boolean;
   colorInfo?: ColorInfo;
-  /** Lazy, cached analysis handles (resolved by tools, not stored inline). */
+  /** Lazy, cached analysis handles (resolved by tools, not stored inline).
+   *  Each ref is the fileIdentity hash that keys the out-of-band analysis cache;
+   *  the heavy artifact (shots/transcript/beats) never lives in the document.
+   *  See PERCEPTION_LAYER §1. */
   analysis?: {
-    beatsRef?: string;
+    shotsRef?: string;
     transcriptRef?: string;
+    beatsRef?: string;
     storyboardRef?: string;
+    analyzedAt?: number; // epoch ms of the most recent analysis write
   };
   missing?: boolean; // surfaced in UI rather than failing silently (PRD §5.3)
 }
