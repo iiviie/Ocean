@@ -118,24 +118,24 @@ Any numeric Transform/Appearance property can be keyframed. `Keyframe`/`Keyframe
 | Transition in/out | Built-in fade/slide/wipe at clip edges | ➕ | `set_transition` (➕); crossfade ties to `add_clip` overlap |
 
 ### 2.8 Track-level — *lane controls*
-See `Track` (`types.ts:127`). **No command exists for any of these today** — ➕ `set_track`.
+See `Track` (`types.ts:127`). All mutated via the **`set_track`** command + tool (✅ shipped).
 
 | Property | Does | Range / unit | Status |
 |---|---|---|---|
-| `name` | Lane label | string | ⚠️ set at creation only; no mutate command |
-| `enabled` | Show/hear the lane (hide video / mute audio) | bool | ✅ rendered (`audio.ts`, `selectors.ts`); ⚠️ no mutate command |
-| `locked` | Prevent edits | bool | ⚠️ **dead** — defined, never enforced; no command |
-| `opacity` | Track-level opacity (video lanes) | 0..1 | ⚠️ **dead** — not consumed by renderer; no command |
-| `volume` | Track-level gain (audio lanes) | 0..1 | ✅ rendered (`audio.ts`: `clip.volume × track.volume`); ⚠️ no mutate command |
+| `name` | Lane label | string | ✅ settable via `set_track` |
+| `enabled` | Show/hear the lane (hide video / mute audio) | bool | ✅ rendered (`audio.ts`, `selectors.ts`) + settable |
+| `locked` | Prevent edits | bool | ✅ settable; ⚠️ **not yet enforced** in UI/edits |
+| `opacity` | Track-level opacity (video lanes) | 0..1 | ✅ settable; ⚠️ **not yet consumed** by renderer |
+| `volume` | Track-level gain (audio lanes) | 0..1 | ✅ rendered (`audio.ts`: `clip.volume × track.volume`) + settable |
 
 ### 2.9 Canvas / project-level — *the composition*
-See `Canvas` (`types.ts:145`). Command `set_canvas` exists; **no tool exposes it** — ➕ tool.
+See `Canvas` (`types.ts:145`). All mutated via the **`set_canvas`** command + tool (✅ shipped).
 
 | Property | Does | Range / unit | Status |
 |---|---|---|---|
-| `width` / `height` | Output resolution | px | ✅ rendered (stage sizing); ⚠️ command only, no tool |
-| `fps` | Frame rate | fps (24/25/30/60) | ⚠️ display-only in preview (browser drives playback); export needs it; no tool |
-| `backgroundColor` | Canvas backdrop | hex | ✅ rendered (`PreviewCanvas`); ⚠️ command only, no tool |
+| `width` / `height` | Output resolution | px | ✅ rendered (stage sizing) + settable |
+| `fps` | Frame rate | fps (24/25/30/60) | ✅ settable; ⚠️ display-only in preview (browser drives playback); export will consume it |
+| `backgroundColor` | Canvas backdrop | hex | ✅ rendered (`PreviewCanvas`) + settable |
 | `duration` | Total length | derived from clips | ✅ read-only |
 
 ---
@@ -186,9 +186,9 @@ One property group ↔ one command keeps the surface learnable. ✅ implemented,
 | Appearance | `set_opacity`, `set_fade` | same | ✅ (blend/radius/border/shadow ➕ → `set_style`) |
 | Color | `set_color` | `set_color` | ➕ |
 | Audio | `set_volume`, `set_fade{audio}`, `set_pan` | same | ✅ volume; fades/pan ➕ |
-| Typography | `set_text` | `set_text` | ✅ core; extended props ➕ |
+| Typography | `set_text` | `set_text` | ✅ core (incl. `lineHeight`); extended props ➕ |
 | Animation | `add_keyframe` / `remove_keyframe` / `clear_keyframes` | same | ➕ |
-| Track-level | `set_track` | `set_track` | ➕ (implementing) |
-| Canvas-level | `set_canvas` | `set_canvas` | command ✅, tool ➕ (implementing) |
+| Track-level | `set_track` | `set_track` | ✅ |
+| Canvas-level | `set_canvas` | `set_canvas` | ✅ |
 
 This table is the contract: when a property moves from ➕ to ✅, it gets a command in `commands.ts`, a tool in **both** `src/agent/tools.ts` and `mcp/server.ts` (kept in lockstep — see `TOOLING_PLAN.md` drift note), and a row here flips status.
