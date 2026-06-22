@@ -48,7 +48,7 @@ There are two parallel workstreams. **A — Manipulation** (what the agent can c
 
 ### B1 — MVP perception (highest ROI, light deps)
 - [x] **Shots** via ffmpeg `select=gt(scene,0.4)`+`showinfo` → `get_shots` (windowed, capped 60). Verified on ffmpeg 8.1.1. *(motion bucket + representative frames deferred — timing only for now)*
-- [~] **Transcript** (segment layer) via faster-whisper (`whisper-ctranslate2`, openai-whisper fallback) → `get_transcript`. Backend-availability check reports `unavailable` until one is installed. ◆ happy path unverified locally (no whisper backend on this machine — `pip install whisper-ctranslate2` to enable + verify).
+- [x] **Transcript** (segment layer) via faster-whisper (`whisper-ctranslate2`) → openai-whisper fallback → `get_transcript`. **Verified end-to-end**: espeak speech → whisper base → exact transcript parsed (`language:en`, segment timings). Backend-availability check reports `unavailable` when none installed.
 - [x] **Silence** via ffmpeg `silencedetect` (-30dB, ≥0.5s) → `get_silence`. Verified on ffmpeg 8.1.1. *(speech/music classification + `get_media_summary` still to do)*
 - [ ] Spatial faces (MediaPipe in renderer Worker) → protect/safe/suggest-caption rects → `get_shot_layout`
 - [x] `get_frame` escape hatch (shared with A3) — source-asset frame grab via ffmpeg → image block. Verified.

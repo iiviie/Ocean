@@ -54,6 +54,7 @@ Center-anchored, resolution-independent. See `Transform` (`types.ts:49`).
 | `scale` | Uniform scale (1 = natural fit) | > 0 (UI 0.1..4) | ✅ | `set_transform` |
 | `rotation` | Rotation, clockwise | degrees −180..180 | ✅ | `set_transform` |
 | `flipH` / `flipV` | Mirror horizontally / vertically | bool | ✅ rendered (`PreviewCanvas`); settable; no UI control | `set_transform` |
+| `fit` | How media fills its box (cover/contain/fill/none) | enum | ➕ | `set_transform{fit}` (proposed) |
 | `crop` | Inset crop (top/right/bottom/left) | normalized 0..1 each | ➕ | `set_transform{crop}` (proposed) |
 | `anchor` | Override the transform anchor point | normalized 0..1 | ➕ | proposed |
 
@@ -192,3 +193,20 @@ One property group ↔ one command keeps the surface learnable. ✅ implemented,
 | Canvas-level | `set_canvas` | `set_canvas` | ✅ |
 
 This table is the contract: when a property moves from ➕ to ✅, it gets a command in `commands.ts`, a tool in **both** `src/agent/tools.ts` and `mcp/server.ts` (kept in lockstep — see `TOOLING_PLAN.md` drift note), and a row here flips status.
+
+---
+
+## Appendix — Industry cross-reference & design altitude
+
+Validated against declarative-JSON editors (Creatomate, Shotstack, Remotion, FFmpeg) and GUI editors (Premiere, After Effects, Final Cut, Resolve, CapCut, Canva). Takeaways that shape Ocean's choices:
+
+**Aim at the consumer-tier altitude (CapCut / Canva), not the pro grade.** For an LLM agent, a small set of normalized, well-named scalars plus **named enums** maps to natural-language intent far better than dozens of pro sliders. Creatomate's flat snake_case schema (no track object — `z_index` + `track` integers on each element; animation objects with `time`/`duration`/`type`) is the cleanest structural template to mirror.
+
+**Named enums are essential, not advanced — and Ocean currently has none:**
+- **Filter presets** (one-shot looks: greyscale/muted/boost/negative…) — higher conversational value than raw brightness/contrast/saturation → fold into `set_color{filter}`.
+- **Transitions** with separate `in`/`out` slots + duration (fade/slide/wipe/zoom) → `set_transition`.
+- **Motion presets** (Ken Burns: zoomIn/Out, slide*) for stills → part of Animation.
+
+**Unit conventions — our choices (§4) are confirmed correct:** normalized `0..1` for opacity/volume, **degrees** for rotation (FFmpeg's radians is the outlier — convert at the boundary), **seconds** at the agent edge, hex color. Integration watch-outs: Resolve uses scalar `1.0`=100% scale; Shotstack puts alpha as *leading* hex; Remotion is frame-based.
+
+**Gaps this surfaced:** `fit` (cover/contain/fill/none — added to §2.2); named filter/transition/motion enums (queued as the highest-value *conversational* additions — see ROADMAP A1/A2). The full per-editor property tables live in the research output; this doc is the Ocean-specific distillation.
