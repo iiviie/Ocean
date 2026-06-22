@@ -21,7 +21,7 @@ There are two parallel workstreams. **A — Manipulation** (what the agent can c
 - [x] **`set_color`** — brightness/contrast/saturation/hue + named filter presets (grayscale/sepia/invert/vintage). `Clip.color` → CSS `filter` on the media element in `PreviewCanvas`. Filter-string math verified. *(temp/tint/exposure/LUT still ➕)*
 - [ ] **`set_pan`** — stereo pan via Web Audio `StereoPannerNode` in `audio.ts` (`el.volume` path is mono today). *(§2.5)*
 - [x] **Extended typography** on `set_text` — `fontWeight`, `italic`, `letterSpacing`, `backgroundColor` (plate), `strokeColor`/`strokeWidth`. Rendered in `PreviewCanvas`. *(configurable text shadow + vertical-align still ➕)*
-- [ ] **`set_style`** — appearance/compositing: `blendMode` (CSS `mix-blend-mode`), `cornerRadius`, `border`, `shadow`. *(§2.3)*
+- [x] **`set_style`** — appearance/compositing: `blendMode` (CSS `mix-blend-mode`), `cornerRadius`, `border`, `shadow`. Applied to the media element in `PreviewCanvas`. *(§2.3)*
 - [ ] **UI controls** for `set_track` (lane header: mute/hide/lock) and `set_canvas` (Format panel becomes editable) — `Timeline.tsx`, `Inspector.tsx`. *(humans get the same powers as the agent)*
 
 ### A2 — Animation

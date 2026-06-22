@@ -63,10 +63,10 @@ Center-anchored, resolution-independent. See `Transform` (`types.ts:49`).
 |---|---|---|---|---|
 | `opacity` | Clip transparency | 0..1 | ✅ | `set_opacity` |
 | `opacityFadeIn` / `opacityFadeOut` | Visual fade durations | seconds | ✅ | `set_fade` |
-| `blendMode` | Compositing mode (normal/screen/multiply/add/overlay…) | enum | ➕ | `set_blend` (proposed) |
-| `cornerRadius` | Rounded corners | normalized / px | ➕ | proposed |
-| `border` | Stroke (width + color) | px + hex | ➕ | proposed |
-| `shadow` | Drop shadow (offset/blur/color) | px + hex | ➕ | proposed |
+| `blendMode` | Compositing mode (normal/multiply/screen/overlay/darken/lighten/difference/add) | enum | ✅ | `set_style` |
+| `cornerRadius` | Rounded corners | 0..1 (1 = pill) | ✅ | `set_style` |
+| `borderColor` / `borderWidth` | Stroke (color + width) | hex + px | ✅ | `set_style` |
+| `shadow` | Drop shadow | bool (detailed offset/blur ➕) | ✅ | `set_style` |
 
 ### 2.4 Color correction — *the look* (video / image)
 Core grade + named looks ship via the **`set_color`** command + tool (✅), applied as a CSS `filter` on the media element. Advanced grading is still ➕.
@@ -185,7 +185,7 @@ One property group ↔ one command keeps the surface learnable. ✅ implemented,
 |---|---|---|---|
 | Temporal | `move_clip`, `trim_clip`, `set_speed`, `split_clip`, `delete_clip` | same names | ✅ |
 | Transform | `set_transform` | `set_transform` | ✅ (crop/anchor ➕) |
-| Appearance | `set_opacity`, `set_fade` | same | ✅ (blend/radius/border/shadow ➕ → `set_style`) |
+| Appearance | `set_opacity`, `set_fade`, `set_style` | same | ✅ |
 | Color | `set_color` | `set_color` | ✅ core grade + filter presets (temp/exposure/LUT ➕) |
 | Audio | `set_volume`, `set_fade{audio}`, `set_pan` | same | ✅ volume; fades/pan ➕ |
 | Typography | `set_text` | `set_text` | ✅ core + weight/italic/letterSpacing/bg-plate/stroke (shadow, vAlign ➕) |
