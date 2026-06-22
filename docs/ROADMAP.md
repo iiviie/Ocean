@@ -29,7 +29,7 @@ There are two parallel workstreams. **A — Manipulation** (what the agent can c
 - [ ] **Transitions** — built-in in/out (fade/slide/wipe) + clip-overlap crossfade. ◆
 
 ### A3 — Convenience & robustness
-- [ ] `get_frame(clipId|assetId, atSec)` tool — render one ≤512px frame to the existing `{image:"data:..."}` MCP path. Shared with Perception B1. *(`TOOLING_PLAN.md` P1)*
+- [x] `get_frame(assetId, atSec)` — source-asset frame → existing `{image:"data:..."}` MCP image block. *(composited-timeline frame at a playhead time — rendering all clips at t — is still TODO; needs canvas capture)*
 - [ ] `duplicate_clip`, `set_range` tool, optional ephemerals (`set_playing`, `select_asset`, `set_zoom`)
 - [ ] **MCP catalog auto-publish** — UI emits its live tool registry on WS connect; `mcp/server.ts` stops hand-mirroring schemas. Kills the lockstep-drift risk. *(do before the surface grows much more)* ◆
 
@@ -51,7 +51,7 @@ There are two parallel workstreams. **A — Manipulation** (what the agent can c
 - [~] **Transcript** (segment layer) via faster-whisper (`whisper-ctranslate2`, openai-whisper fallback) → `get_transcript`. Backend-availability check reports `unavailable` until one is installed. ◆ happy path unverified locally (no whisper backend on this machine — `pip install whisper-ctranslate2` to enable + verify).
 - [x] **Silence** via ffmpeg `silencedetect` (-30dB, ≥0.5s) → `get_silence`. Verified on ffmpeg 8.1.1. *(speech/music classification + `get_media_summary` still to do)*
 - [ ] Spatial faces (MediaPipe in renderer Worker) → protect/safe/suggest-caption rects → `get_shot_layout`
-- [ ] `get_frame` escape hatch (shared with A3)
+- [x] `get_frame` escape hatch (shared with A3) — source-asset frame grab via ffmpeg → image block. Verified.
 
 ### B2 — Richer perception
 - [ ] Shot captions (local VLM, opt-in) → fills `get_shots.caption` ◆
