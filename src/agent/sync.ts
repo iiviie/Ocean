@@ -24,6 +24,8 @@ function connect(): void {
 
   ws.onopen = () => {
     retry = 0;
+    // Identify as the UI so the broker knows which socket executes tool calls.
+    ws?.send(JSON.stringify({ type: "hello", role: "ui" }));
     console.info("[ocean] connected to MCP bridge :%d", PORT);
   };
 

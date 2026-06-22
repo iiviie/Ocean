@@ -1,9 +1,10 @@
-// Ocean MCP server.
+// Ocean MCP server (adapter).
 //
 // Runs under Bun. Speaks MCP over stdio (so Claude Code / Cursor / Claude Desktop
-// can spawn it) and bridges every tool call to the running Ocean UI over a local
-// WebSocket. The UI executes the call through its command bus and returns a
-// compact result — which means every edit the agent makes is visible in the UI.
+// can spawn it) and forwards every tool call to the Ocean UI through the shared
+// broker (mcp/bridge.ts). The adapter is a WebSocket *client* of the broker, NOT
+// a server — so any number of adapters can run at once and drive the one UI
+// concurrently. The broker is auto-spawned on demand if it isn't already up.
 //
 // IMPORTANT: stdout is reserved for the MCP JSON-RPC stream. All logging goes to
 // stderr via console.error.
@@ -13,64 +14,96 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import type { ServerWebSocket } from "bun";
 
 const PORT = Number(process.env.OCEAN_PORT ?? 7331);
+const BRIDGE_URL = `ws://127.0.0.1:${PORT}`;
+const BRIDGE_PATH = new URL("./bridge.ts", import.meta.url).pathname;
 
-// ---------- UI WebSocket bridge ----------
-let uiSocket: ServerWebSocket<unknown> | null = null;
+// ---------- bridge client (connects to the singleton broker) ----------
+let bridgeWs: WebSocket | null = null;
+let spawnedBroker = false;
+let reconnecting = false;
 const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
 
-Bun.serve({
-  port: PORT,
-  hostname: "127.0.0.1",
-  fetch(req, server) {
-    if (server.upgrade(req)) return;
-    return new Response("Ocean MCP bridge");
-  },
-  websocket: {
-    open(ws) {
-      uiSocket = ws;
-      console.error("[ocean-mcp] UI connected");
-    },
-    close() {
-      uiSocket = null;
-      console.error("[ocean-mcp] UI disconnected");
-    },
-    message(_ws, raw) {
-      let msg: { type: string; id?: string; ok?: boolean; data?: unknown; error?: string };
-      try {
-        msg = JSON.parse(String(raw));
-      } catch {
-        return;
-      }
-      if (msg.type === "result" && msg.id) {
-        const p = pending.get(msg.id);
-        if (!p) return;
-        clearTimeout(p.timer);
-        pending.delete(msg.id);
-        if (msg.ok) p.resolve(msg.data);
-        else p.reject(new Error(msg.error ?? "tool failed in UI"));
-      }
-    },
-  },
-});
-console.error(`[ocean-mcp] bridge listening on ws://127.0.0.1:${PORT}/ui`);
+function handleBridgeMessage(raw: string): void {
+  let msg: { type: string; id?: string; ok?: boolean; data?: unknown; error?: string };
+  try { msg = JSON.parse(raw); } catch { return; }
+  if (msg.type === "result" && msg.id) {
+    const p = pending.get(msg.id);
+    if (!p) return;
+    clearTimeout(p.timer);
+    pending.delete(msg.id);
+    if (msg.ok) p.resolve(msg.data);
+    else p.reject(new Error(msg.error ?? "tool failed in UI"));
+  }
+}
 
-function invokeUI(tool: string, args: Record<string, unknown>): Promise<unknown> {
-  if (!uiSocket) {
-    return Promise.reject(
-      new Error("Ocean UI is not connected. Launch it with `pnpm dev` (http://localhost:5173) or `pnpm tauri:dev`, then retry."),
-    );
+function spawnBroker(): void {
+  if (spawnedBroker) return;
+  spawnedBroker = true; // only ever try once per process; broker is idempotent
+  try {
+    Bun.spawn(["bun", BRIDGE_PATH], { stdin: "ignore", stdout: "ignore", stderr: "ignore" }).unref();
+    console.error("[ocean-mcp] spawned bridge broker");
+  } catch (e) {
+    console.error("[ocean-mcp] failed to spawn broker:", e);
+  }
+}
+
+function connectOnce(): Promise<boolean> {
+  return new Promise((resolve) => {
+    let ws: WebSocket;
+    try { ws = new WebSocket(BRIDGE_URL); } catch { resolve(false); return; }
+    const to = setTimeout(() => { try { ws.close(); } catch { /* noop */ } resolve(false); }, 1000);
+    ws.onopen = () => {
+      clearTimeout(to);
+      ws.send(JSON.stringify({ type: "hello", role: "agent" }));
+      bridgeWs = ws;
+      console.error("[ocean-mcp] connected to bridge");
+      resolve(true);
+    };
+    ws.onmessage = (ev) => handleBridgeMessage(String(ev.data));
+    ws.onclose = () => {
+      if (bridgeWs !== ws) return;
+      bridgeWs = null;
+      // Fail any in-flight calls fast rather than waiting out their 10s timeout.
+      for (const [, p] of pending) { clearTimeout(p.timer); p.reject(new Error("bridge connection lost")); }
+      pending.clear();
+      setTimeout(() => ensureConnected().catch(() => {}), 500);
+    };
+    ws.onerror = () => { clearTimeout(to); try { ws.close(); } catch { /* noop */ } resolve(false); };
+  });
+}
+
+async function ensureConnected(): Promise<void> {
+  if (bridgeWs && bridgeWs.readyState === WebSocket.OPEN) return;
+  if (reconnecting) return;
+  reconnecting = true;
+  try {
+    for (let attempt = 0; attempt < 40; attempt++) {
+      if (bridgeWs && bridgeWs.readyState === WebSocket.OPEN) break;
+      if (await connectOnce()) break;
+      if (attempt === 0) spawnBroker(); // broker absent → start it once, then keep retrying to connect
+      await Bun.sleep(150);
+    }
+  } finally {
+    reconnecting = false;
+  }
+}
+
+async function invokeUI(tool: string, args: Record<string, unknown>): Promise<unknown> {
+  await ensureConnected();
+  if (!bridgeWs || bridgeWs.readyState !== WebSocket.OPEN) {
+    throw new Error("Ocean bridge unavailable. Is the app running? (pnpm dev / pnpm electron:dev)");
   }
   const id = crypto.randomUUID();
+  const ws = bridgeWs;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
       reject(new Error(`tool '${tool}' timed out after 10s`));
     }, 10_000);
     pending.set(id, { resolve, reject, timer });
-    uiSocket!.send(JSON.stringify({ type: "invoke", id, tool, args }));
+    ws.send(JSON.stringify({ type: "invoke", id, tool, args }));
   });
 }
 
@@ -152,6 +185,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     return { content: [{ type: "text", text: e instanceof Error ? e.message : String(e) }], isError: true };
   }
 });
+
+// Warm the bridge up front (spawns the broker if needed) so the first tool call
+// doesn't pay the connect/spawn latency. Best-effort; tool calls re-ensure anyway.
+ensureConnected().catch(() => {});
 
 await server.connect(new StdioServerTransport());
 console.error("[ocean-mcp] MCP stdio server ready");
