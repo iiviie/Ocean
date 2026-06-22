@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash } from "node:crypto";
-import { open, stat, mkdir, readFile, writeFile } from "node:fs/promises";
+import { open, stat, mkdir, readFile, writeFile, readdir } from "node:fs/promises";
 
 const execFileP = promisify(execFile);
 
@@ -137,22 +137,77 @@ async function detectShots(path: string, durationSec: number) {
   return { schemaVersion: SHOTS_SCHEMA_VERSION, analyzedAt: Date.now(), durationSec: r2(durationSec), shotCount: shots.length, shots };
 }
 
+// ---- transcript (speech-to-text) ----
+// Default backend: the openai-whisper CLI (`pip install openai-whisper`), which
+// writes a JSON sidecar with segment timings that we normalize. Swap the
+// invocation here to target whisper.cpp / faster-whisper instead.
+const TRANSCRIPT_SCHEMA_VERSION = 1;
+
+const cmdCache = new Map<string, boolean>();
+async function commandExists(cmd: string): Promise<boolean> {
+  const cached = cmdCache.get(cmd);
+  if (cached !== undefined) return cached;
+  let ok = false;
+  try {
+    await execFileP(process.platform === "win32" ? "where" : "which", [cmd]);
+    ok = true;
+  } catch {
+    ok = false;
+  }
+  cmdCache.set(cmd, ok);
+  return ok;
+}
+
+async function transcribe(path: string, hash: string) {
+  const outDir = join(analysisDir(hash), "_whisper");
+  await mkdir(outDir, { recursive: true });
+  await execFileP(
+    "whisper",
+    [path, "--model", "base", "--output_format", "json", "--output_dir", outDir, "--fp16", "False", "--verbose", "False"],
+    { maxBuffer: 64 * 1024 * 1024 },
+  );
+  const jf = (await readdir(outDir)).find((f) => f.endsWith(".json"));
+  if (!jf) throw new Error("whisper produced no JSON output");
+  const parsed = JSON.parse(await readFile(join(outDir, jf), "utf8")) as {
+    language?: string;
+    segments?: { start: number; end: number; text: string }[];
+  };
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const segments = (parsed.segments ?? []).map((s, i) => ({ id: i, start: r2(s.start), end: r2(s.end), text: (s.text ?? "").trim() }));
+  return { schemaVersion: TRANSCRIPT_SCHEMA_VERSION, analyzedAt: Date.now(), language: parsed.language ?? "", segmentCount: segments.length, segments };
+}
+
 // ---- job orchestration ----
-// Async by design: analysis (ffmpeg) far exceeds the MCP bridge's 10s timeout,
-// so callers START a job and POLL status; they never block on the work.
+// Async by design: analysis (ffmpeg/whisper) far exceeds the MCP bridge's 10s
+// timeout, so callers START a job and POLL status; they never block on it.
+interface AnalyzeCtx { durationSec: number; hash: string }
+interface Analyzer {
+  run: (path: string, ctx: AnalyzeCtx) => Promise<unknown>;
+  available?: () => Promise<boolean>; // is the backend (e.g. whisper) on PATH?
+}
 const inFlight = new Map<string, Promise<void>>(); // key `${hash}:${kind}`
 
-const ANALYZERS: Record<string, (path: string, opts: { durationSec: number }) => Promise<unknown>> = {
-  shots: (path, opts) => detectShots(path, opts.durationSec),
+const ANALYZERS: Record<string, Analyzer> = {
+  shots: { run: (p, c) => detectShots(p, c.durationSec) },
+  transcript: { run: (p, c) => transcribe(p, c.hash), available: () => commandExists("whisper") },
 };
 
-function startAnalysis(hash: string, path: string, kind: string, opts: { durationSec: number }): string {
-  if (!ANALYZERS[kind]) return "unsupported";
+// "ok" | "unsupported" (no analyzer) | "unavailable" (backend not installed)
+async function backendStatus(kind: string): Promise<string> {
+  const a = ANALYZERS[kind];
+  if (!a) return "unsupported";
+  if (a.available && !(await a.available())) return "unavailable";
+  return "ok";
+}
+
+function startAnalysis(hash: string, path: string, kind: string, ctx: AnalyzeCtx): string {
+  const a = ANALYZERS[kind];
+  if (!a) return "unsupported";
   const key = `${hash}:${kind}`;
   if (inFlight.has(key)) return "pending";
   const job = (async () => {
     try {
-      await writeAnalysis(hash, kind, await ANALYZERS[kind](path, opts));
+      await writeAnalysis(hash, kind, await a.run(path, ctx));
     } catch (e) {
       console.error(`[ocean] analysis '${kind}' failed:`, e);
     } finally {
@@ -168,8 +223,10 @@ async function analysisStatus(hash: string, kinds: string[]): Promise<Record<str
   for (const kind of kinds) {
     if (inFlight.has(`${hash}:${kind}`)) out[kind] = "pending";
     else if (await readAnalysis(hash, kind)) out[kind] = "ready";
-    else out[kind] = ANALYZERS[kind] ? "none" : "unsupported";
+    else out[kind] = await backendStatus(kind); // "none"→reported as ok-but-absent below
   }
+  // backendStatus returns "ok" when a kind could run but hasn't — surface as "none".
+  for (const kind of kinds) if (out[kind] === "ok") out[kind] = "none";
   return out;
 }
 
@@ -188,8 +245,10 @@ app.whenReady().then(() => {
   ipcMain.handle("analyze-media", async (_e, hash: string, path: string, kinds: string[], opts: { durationSec: number }) => {
     const status: Record<string, string> = {};
     for (const kind of kinds) {
-      if (await readAnalysis(hash, kind)) status[kind] = "ready"; // cache-first: no-op
-      else status[kind] = startAnalysis(hash, path, kind, opts ?? { durationSec: 0 });
+      if (await readAnalysis(hash, kind)) { status[kind] = "ready"; continue; } // cache-first: no-op
+      const b = await backendStatus(kind);
+      if (b !== "ok") { status[kind] = b; continue; } // unsupported / unavailable backend
+      status[kind] = startAnalysis(hash, path, kind, { durationSec: opts?.durationSec ?? 0, hash });
     }
     return status;
   });

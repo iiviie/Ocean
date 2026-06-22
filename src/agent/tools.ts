@@ -108,6 +108,12 @@ interface ShotsData {
   shots: { idx: number; startSec: number; endSec: number; durSec: number }[];
 }
 
+interface TranscriptData {
+  language: string;
+  segmentCount: number;
+  segments: { id: number; start: number; end: number; text: string }[];
+}
+
 /** Resolve an asset to its analysis context: the fileIdentity cache key, the
  *  real filesystem path, and its duration in seconds. */
 function analysisCtx(assetId: string) {
@@ -217,6 +223,35 @@ export const tools: Record<string, ToolDef> = {
         durationSec: data.durationSec,
         total: data.shots.length,
         shots,
+        ...(win.length > CAP ? { truncated: true, hint: "narrow fromSec/toSec" } : {}),
+      };
+    },
+  },
+
+  get_transcript: {
+    name: "get_transcript",
+    description: "Windowed speech transcript (segment layer: id, start, end, text in seconds). Args: assetId, fromSec?, toSec?. Returns { status } if not ready — 'unavailable' means no speech-to-text backend is installed. Run analyze_media with kinds:['transcript'] first.",
+    run: async (a) => {
+      if (!inElectron) throw new Error("analysis needs the desktop app");
+      const { asset, hash } = analysisCtx(a.assetId as string);
+      const data = (await readAnalysis(hash, "transcript")) as TranscriptData | null;
+      if (!data) {
+        const status = await analysisStatus(hash, ["transcript"]);
+        return { assetId: a.assetId, status: status?.transcript ?? "none" };
+      }
+      if (asset.analysis?.transcriptRef !== hash) {
+        dispatch({ type: "set_asset_analysis", assetId: asset.id, patch: { transcriptRef: hash, analyzedAt: Date.now() } });
+      }
+      const from = (a.fromSec as number) ?? 0;
+      const to = a.toSec != null ? (a.toSec as number) : Infinity;
+      const win = data.segments.filter((s) => s.end > from && s.start < to);
+      const CAP = 100;
+      const segments = win.slice(0, CAP).map((s) => ({ id: s.id, start: s.start, end: s.end, text: s.text }));
+      return {
+        assetId: a.assetId,
+        language: data.language,
+        total: data.segments.length,
+        segments,
         ...(win.length > CAP ? { truncated: true, hint: "narrow fromSec/toSec" } : {}),
       };
     },
