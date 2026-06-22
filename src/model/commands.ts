@@ -104,6 +104,28 @@ function wouldOverlap(track: Track, start: Ticks, dur: Ticks, exceptId?: string)
   return track.clips.some((c) => c.id !== exceptId && rangesOverlap(start, start + dur, c.timelineStart, c.timelineEnd));
 }
 
+/** Timeline end of the nearest clip sitting to the LEFT of `clip` (0 if none) —
+ *  the furthest its left edge may be trimmed without overlapping a neighbour. */
+function neighborEnd(track: Track, clip: Clip): Ticks {
+  let bound = 0;
+  for (const o of track.clips) {
+    if (o.id === clip.id) continue;
+    if (o.timelineEnd <= clip.timelineStart) bound = Math.max(bound, o.timelineEnd);
+  }
+  return bound;
+}
+
+/** Timeline start of the nearest clip sitting to the RIGHT of `clip` (∞ if none)
+ *  — the furthest its right edge may be trimmed without overlapping a neighbour. */
+function neighborStart(track: Track, clip: Clip): Ticks {
+  let bound = Infinity;
+  for (const o of track.clips) {
+    if (o.id === clip.id) continue;
+    if (o.timelineStart >= clip.timelineEnd) bound = Math.min(bound, o.timelineStart);
+  }
+  return bound;
+}
+
 /** Clamp a desired start for moving `clip` within `track` so it butts up flush
  *  against the nearest neighbor in the direction of travel instead of
  *  overlapping it ("block / clamp to edge"). Relies on the no-overlap invariant:
@@ -345,16 +367,33 @@ export function applyCommand(ctx: ApplyContext, cmd: Command): Diff {
     case "trim_clip": {
       const found = findClip(project, cmd.clipId);
       if (!found) throw new Error(`clip ${cmd.clipId} not found`);
-      const { clip } = found;
-      // Left-edge trim: move the in-point AND the timeline start together so the
-      // RIGHT edge stays put (grab left edge, drag right → shorter from the start).
+      const { track, clip } = found;
+      // Neighbours on the same lane bound how far an edge can travel (clips never
+      // overlap). Computed before mutating so the bounds reflect the start state.
+      const leftBound = neighborEnd(track, clip);
+      const rightBound = neighborStart(track, clip);
+
+      // Left-edge trim: in-point and timeline start move together so the RIGHT
+      // edge stays put. Clamp the start against 0 and the left neighbour, then
+      // back-solve the in-point from the clamped start so source stays in sync.
       if (cmd.sourceIn != null) {
-        const newIn = Math.max(0, Math.min(cmd.sourceIn, clip.sourceOut - 1));
-        clip.timelineStart = Math.max(0, clip.timelineStart + Math.round((newIn - clip.sourceIn) / clip.speed));
+        const desiredIn = Math.max(0, Math.min(cmd.sourceIn, clip.sourceOut - 1));
+        let newStart = clip.timelineStart + Math.round((desiredIn - clip.sourceIn) / clip.speed);
+        newStart = Math.max(leftBound, newStart);
+        let newIn = clip.sourceIn + Math.round((newStart - clip.timelineStart) * clip.speed);
+        newIn = Math.max(0, Math.min(newIn, clip.sourceOut - 1));
         clip.sourceIn = newIn;
+        clip.timelineStart = Math.max(0, newStart);
       }
-      // Right-edge trim: move the out-point; the timeline end follows (start fixed).
-      if (cmd.sourceOut != null) clip.sourceOut = Math.max(clip.sourceIn + 1, cmd.sourceOut);
+      // Right-edge trim: out-point moves; the timeline end follows (start fixed).
+      // Clamp the end against the right neighbour, then back-solve the out-point.
+      if (cmd.sourceOut != null) {
+        const desiredOut = Math.max(clip.sourceIn + 1, cmd.sourceOut);
+        let newEnd = clip.timelineStart + Math.round((desiredOut - clip.sourceIn) / clip.speed);
+        newEnd = Math.min(rightBound, newEnd);
+        const newOut = clip.sourceIn + Math.round((newEnd - clip.timelineStart) * clip.speed);
+        clip.sourceOut = Math.max(clip.sourceIn + 1, newOut);
+      }
       clip.timelineEnd = clip.timelineStart + Math.round((clip.sourceOut - clip.sourceIn) / clip.speed);
       return `trimmed ${clip.id} → ${t(clip.timelineStart)}..${t(clip.timelineEnd)} (src ${t(clip.sourceIn)}→${t(clip.sourceOut)})`;
     }

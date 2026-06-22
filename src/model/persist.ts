@@ -7,7 +7,7 @@
 // the desktop app media is referenced by file path, so it persists fully.
 import type { Project } from "./types";
 
-const KEY = "ocean.project.v1";
+const KEY = "ocean.project.v2";
 
 /** Restore the persisted scratch project, or null if none/invalid. */
 export function loadPersisted(): Project | null {

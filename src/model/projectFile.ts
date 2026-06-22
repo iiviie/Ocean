@@ -6,7 +6,6 @@
 import { useStore, createEmptyProject } from "./store";
 import { useAppState, lastProjectPath, forgetProject } from "./appState";
 import { loadPersisted, saveLocal } from "./persist";
-import { createSampleProject } from "./sample";
 import { inElectron, projectPickNew, projectOpen, projectRead, projectSave } from "@/engine/render";
 import type { Project } from "./types";
 
@@ -128,7 +127,8 @@ export async function bootstrap(): Promise<void> {
   if (inElectron) {
     useAppState.getState().setView("welcome");
   } else {
-    useStore.getState().loadProject(loadPersisted() ?? createSampleProject());
+    // Browser dev: restore scratch edits, else start empty (no sample media).
+    useStore.getState().loadProject(loadPersisted() ?? createEmptyProject());
     useAppState.getState().setView("editor");
   }
 }
