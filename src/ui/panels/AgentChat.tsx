@@ -31,7 +31,7 @@ export function AgentChat() {
   };
 
   return (
-    <aside className="flex w-[300px] flex-none flex-col bg-card">
+    <div className="flex min-h-0 flex-1 flex-col">
       <div ref={logRef} className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-4">
         {log.length === 0 && (
           <div className="space-y-3 text-[13px] leading-relaxed text-muted-foreground">
@@ -75,6 +75,6 @@ export function AgentChat() {
           </button>
         </div>
       </div>
-    </aside>
+    </div>
   );
 }

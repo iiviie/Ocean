@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, FilePlus2, FolderOpen, Save, XCircle, Download } from "lucide-react";
+import { ChevronDown, FilePlus2, FolderOpen, Save, XCircle, Download, PanelLeft, Check } from "lucide-react";
 import { useStore } from "@/model/store";
 import { useAppState } from "@/model/appState";
+import { usePanels, type PanelId } from "@/ui/layout/panels";
 import { openProject, saveProject, closeProject } from "@/model/projectFile";
 import { inElectron } from "@/engine/render";
 import { Button } from "@/ui/components/Button";
+import { SidePanel } from "@/ui/layout/SidePanel";
 import { MediaLibrary } from "./panels/MediaLibrary";
 import { PreviewCanvas } from "./panels/PreviewCanvas";
 import { Timeline } from "./panels/Timeline";
@@ -26,6 +28,7 @@ function EditorShell() {
   const canvas = useStore((s) => s.project.canvas);
   const status = useAppState((s) => s.status);
   const projectPath = useAppState((s) => s.projectPath);
+  const open = usePanels((s) => s.open);
   const [showNew, setShowNew] = useState(false);
   const [showExport, setShowExport] = useState(false);
 
@@ -58,37 +61,31 @@ function EditorShell() {
   return (
     <div className="flex h-full flex-col bg-background text-foreground">
       {/* top bar */}
-      <header className="flex h-10 flex-none items-center justify-between border-b border-border bg-background px-3">
-        <div className="flex items-center gap-1.5">
-          <div className="flex h-6 items-center gap-1.5 rounded-md bg-card px-2 text-xs text-muted-foreground">
-            <span className="size-1.5 rounded-full bg-primary" />
-            Ocean
-          </div>
+      <header className="flex h-10 flex-none items-center justify-between border-b border-border bg-background px-2">
+        <div className="flex items-center gap-1">
           <ProjectMenu onNew={() => setShowNew(true)} />
+          <ViewMenu />
         </div>
 
-        <div className="flex items-center gap-2 text-sm">
-          <span className="text-foreground">{name}</span>
-          <span className="text-[11px] text-subtle">{canvas.width}×{canvas.height} · {canvas.fps}fps</span>
+        <div className="flex items-center gap-2.5 text-sm">
+          <span className="font-medium text-foreground">{name}</span>
+          <span className="text-[11px] tabular-nums text-subtle">{canvas.width}×{canvas.height} · {canvas.fps}fps</span>
           <StatusDot status={status} hasPath={!!projectPath} />
         </div>
 
-        <div className="flex items-center gap-2">
-          <Button variant="secondary" size="sm" onClick={() => setShowExport(true)}>
-            <Download size={13} /> Export
-          </Button>
-          <div className="grid size-6 place-items-center rounded-full bg-primary text-[11px] font-semibold text-white">O</div>
-        </div>
+        <Button variant="secondary" size="sm" onClick={() => setShowExport(true)}>
+          <Download size={13} /> Export
+        </Button>
       </header>
 
       {/* main row */}
       <div className="flex min-h-0 flex-1">
-        <AgentChat />
-        <MediaLibrary />
-        <div className="min-w-0 flex-1 border-x border-border">
+        {open.chat && <SidePanel id="chat" side="left" title="Assistant"><AgentChat /></SidePanel>}
+        {open.media && <SidePanel id="media" side="left" title="Media"><MediaLibrary /></SidePanel>}
+        <div className="min-w-0 flex-1">
           <PreviewCanvas />
         </div>
-        <Properties />
+        {open.inspector && <SidePanel id="inspector" side="right" title="Inspector"><Properties /></SidePanel>}
       </div>
 
       {/* timeline */}
@@ -102,10 +99,10 @@ function EditorShell() {
   );
 }
 
-function ProjectMenu({ onNew }: { onNew: () => void }) {
+/** Small dropdown used by the Project and View menus. */
+function Menu({ trigger, children }: { trigger: React.ReactNode; children: (close: () => void) => React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent) => {
@@ -114,48 +111,65 @@ function ProjectMenu({ onNew }: { onNew: () => void }) {
     window.addEventListener("mousedown", close);
     return () => window.removeEventListener("mousedown", close);
   }, [open]);
-
-  const act = (fn: () => void) => () => { setOpen(false); fn(); };
-
   return (
     <div ref={ref} className="relative">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="flex h-6 items-center gap-0.5 rounded-md px-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
-      >
-        Project <ChevronDown size={12} />
+      <button onClick={() => setOpen((o) => !o)} className="flex h-7 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground">
+        {trigger}
       </button>
       {open && (
-        <div className="absolute left-0 top-7 z-50 min-w-44 overflow-hidden rounded-md border border-border bg-popover py-1 text-[12px] shadow-xl">
-          <MenuItem icon={FilePlus2} label="New Project…" onClick={act(onNew)} />
-          <MenuItem icon={FolderOpen} label="Open Project…" disabled={!inElectron} onClick={act(() => void openProject())} />
-          <div className="my-1 h-px bg-border-soft" />
-          <MenuItem icon={Save} label="Save" shortcut="⌘S" onClick={act(() => void saveProject())} />
-          <MenuItem icon={XCircle} label="Close Project" onClick={act(() => void closeProject())} />
+        <div className="absolute left-0 top-8 z-50 min-w-48 overflow-hidden rounded-md border border-border bg-popover py-1 text-[12px] shadow-xl">
+          {children(() => setOpen(false))}
         </div>
       )}
     </div>
   );
 }
 
-function MenuItem({
-  icon: Icon, label, shortcut, onClick, disabled,
-}: {
-  icon: typeof Save;
-  label: string;
-  shortcut?: string;
-  onClick: () => void;
-  disabled?: boolean;
-}) {
+function ProjectMenu({ onNew }: { onNew: () => void }) {
   return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      className={cn(
-        "flex w-full items-center gap-2 px-3 py-1.5 text-left text-foreground",
-        disabled ? "cursor-not-allowed opacity-40" : "hover:bg-accent",
+    <Menu trigger={<>Project <ChevronDown size={12} /></>}>
+      {(close) => (
+        <>
+          <MenuItem icon={FilePlus2} label="New Project…" onClick={() => { close(); onNew(); }} />
+          <MenuItem icon={FolderOpen} label="Open Project…" disabled={!inElectron} onClick={() => { close(); void openProject(); }} />
+          <div className="my-1 h-px bg-border-soft" />
+          <MenuItem icon={Save} label="Save" shortcut="⌘S" onClick={() => { close(); void saveProject(); }} />
+          <MenuItem icon={XCircle} label="Close Project" onClick={() => { close(); void closeProject(); }} />
+        </>
       )}
-    >
+    </Menu>
+  );
+}
+
+const PANEL_LABELS: { id: PanelId; label: string }[] = [
+  { id: "chat", label: "Assistant" },
+  { id: "media", label: "Media" },
+  { id: "inspector", label: "Inspector" },
+];
+
+function ViewMenu() {
+  const open = usePanels((s) => s.open);
+  const toggle = usePanels((s) => s.toggle);
+  return (
+    <Menu trigger={<><PanelLeft size={13} /> View <ChevronDown size={12} /></>}>
+      {() => (
+        <>
+          <div className="px-3 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-wider text-subtle">Panels</div>
+          {PANEL_LABELS.map(({ id, label }) => (
+            <button key={id} onClick={() => toggle(id)} className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-foreground hover:bg-accent">
+              <span className="grid size-3.5 place-items-center">{open[id] && <Check size={13} className="text-primary" />}</span>
+              <span className="flex-1">{label}</span>
+            </button>
+          ))}
+        </>
+      )}
+    </Menu>
+  );
+}
+
+function MenuItem({ icon: Icon, label, shortcut, onClick, disabled }: { icon: typeof Save; label: string; shortcut?: string; onClick: () => void; disabled?: boolean }) {
+  return (
+    <button onClick={onClick} disabled={disabled} className={cn("flex w-full items-center gap-2 px-3 py-1.5 text-left text-foreground", disabled ? "cursor-not-allowed opacity-40" : "hover:bg-accent")}>
       <Icon size={13} className="text-subtle" />
       <span className="flex-1">{label}</span>
       {shortcut && <span className="text-[10px] text-subtle">{shortcut}</span>}
@@ -164,7 +178,7 @@ function MenuItem({
 }
 
 function StatusDot({ status, hasPath }: { status: string; hasPath: boolean }) {
-  if (!hasPath) return <span className="text-[11px] text-subtle">— scratch</span>;
+  if (!hasPath) return <span className="text-[11px] text-subtle">scratch</span>;
   const map: Record<string, { text: string; cls: string }> = {
     saved: { text: "Saved", cls: "text-subtle" },
     saving: { text: "Saving…", cls: "text-muted-foreground" },
@@ -172,5 +186,10 @@ function StatusDot({ status, hasPath }: { status: string; hasPath: boolean }) {
     error: { text: "Save failed", cls: "text-destructive" },
   };
   const s = map[status] ?? map.saved;
-  return <span className={cn("text-[11px]", s.cls)}>— {s.text}</span>;
+  return (
+    <span className={cn("flex items-center gap-1 text-[11px]", s.cls)}>
+      <span className={cn("size-1.5 rounded-full", status === "dirty" ? "bg-beat" : status === "error" ? "bg-destructive" : "bg-audio")} />
+      {s.text}
+    </span>
+  );
 }

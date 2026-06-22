@@ -30,9 +30,9 @@ export function MediaLibrary() {
   const dispatch = useStore((s) => s.dispatch);
 
   return (
-    <aside className="flex w-[232px] flex-none flex-col border-l border-border bg-card">
+    <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex flex-none items-center justify-between px-3 py-2.5">
-        <button className="flex items-center gap-1.5 text-[12px] text-muted-foreground hover:text-foreground" onClick={() => void importViaDialog()}>
+        <button className="flex items-center gap-1.5 rounded-md bg-secondary px-2 py-1 text-[12px] text-muted-foreground hover:bg-accent hover:text-foreground" onClick={() => void importViaDialog()}>
           <Import size={13} /> Import media
         </button>
         <span className="text-[11px] text-subtle">{assets.length}</span>
@@ -74,8 +74,8 @@ export function MediaLibrary() {
             </button>
           );
         })}
-        {assets.length === 0 && <p className="col-span-2 text-[11px] text-subtle">No media — click Import.</p>}
+        {assets.length === 0 && <p className="col-span-2 text-[11px] text-subtle">No media yet — click Import to add clips.</p>}
       </div>
-    </aside>
+    </div>
   );
 }
