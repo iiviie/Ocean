@@ -203,6 +203,36 @@ export const tools: Record<string, ToolDef> = {
       return { assetId: a.assetId, status: await analysisStatus(hash, kinds) };
     },
   },
+  get_media_summary: {
+    name: "get_media_summary",
+    description: "Cheap one-shot overview of an asset: kind, duration, audio, dimensions, and which analyses are ready (shots/silence/transcript counts or status). Start here before pulling detail. Args: assetId.",
+    run: async (a) => {
+      const asset = useStore.getState().project.mediaLibrary.find((x) => x.id === (a.assetId as string));
+      if (!asset) throw new Error(`asset ${a.assetId} not found`);
+      const base = {
+        assetId: asset.id, kind: asset.kind, name: asset.name,
+        durationSec: round2(ticksToSeconds(asset.durationTicks)),
+        hasAudio: asset.hasAudio, w: asset.naturalWidth, h: asset.naturalHeight,
+      };
+      const hash = asset.fileIdentity?.hash;
+      if (!inElectron || !hash) return { ...base, analysis: "unavailable (desktop import required)" };
+      const status = await analysisStatus(hash, ["shots", "silence", "transcript"]);
+      const out: Record<string, unknown> = { ...base, status };
+      if (status?.shots === "ready") {
+        const d = (await readAnalysis(hash, "shots")) as ShotsData | null;
+        if (d) out.shots = d.shotCount;
+      }
+      if (status?.silence === "ready") {
+        const d = (await readAnalysis(hash, "silence")) as SilenceData | null;
+        if (d) out.silence = { spans: d.silenceCount, sec: round2(d.silences.reduce((s, x) => s + x.dur, 0)) };
+      }
+      if (status?.transcript === "ready") {
+        const d = (await readAnalysis(hash, "transcript")) as TranscriptData | null;
+        if (d) out.transcript = { segments: d.segmentCount, lang: d.language };
+      }
+      return out;
+    },
+  },
   get_shots: {
     name: "get_shots",
     description: "Windowed shot list for a video asset (idx, start, end, dur in seconds). Args: assetId, fromSec?, toSec?. If not analyzed yet returns { status }; call analyze_media first.",
