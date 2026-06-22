@@ -20,24 +20,27 @@ export function createSampleProject(): Project {
       { id: "a3", kind: "image", name: "logo.png", uri: "asset://logo.png", durationTicks: 0, naturalWidth: 512, naturalHeight: 512, hasAudio: false, colorInfo: { straightAlpha: true } },
       { id: "a4", kind: "audio", name: "track.mp3", uri: "asset://track.mp3", durationTicks: sec(30), naturalWidth: 0, naturalHeight: 0, hasAudio: true },
     ],
+    // Layer order is bottom→top: audio lanes sit at the bottom, video lanes on
+    // top, and text rides a video lane above the footage (text is not its own
+    // track kind anymore).
     tracks: [
-      {
-        id: "t1", kind: "video", name: "Video 1", enabled: true, locked: false, opacity: 1, volume: 1,
-        clips: [
-          { id: "c1", kind: "video", assetId: "a1", timelineStart: sec(0), timelineEnd: sec(5), sourceIn: sec(0), sourceOut: sec(5), speed: 1, transform: defaultTransform(), opacity: 1, opacityFadeIn: 0, opacityFadeOut: sec(0.5), volume: 1, keyframes: [], label: "c1" },
-          { id: "c2", kind: "video", assetId: "a2", timelineStart: sec(5), timelineEnd: sec(11), sourceIn: sec(2), sourceOut: sec(8), speed: 1, transform: defaultTransform(), opacity: 1, opacityFadeIn: sec(0.3), opacityFadeOut: 0, volume: 1, keyframes: [], label: "c2" },
-        ],
-      },
-      {
-        id: "t2", kind: "text", name: "Text 1", enabled: true, locked: false, opacity: 1, volume: 1,
-        clips: [
-          { id: "c3", kind: "text", timelineStart: sec(0.5), timelineEnd: sec(3.5), sourceIn: 0, sourceOut: sec(3), speed: 1, transform: { ...defaultTransform(), centerY: 0.82 }, opacity: 1, opacityFadeIn: sec(0.2), opacityFadeOut: sec(0.2), volume: 1, keyframes: [], text: { ...defaultTextProps(), content: "OCEAN", fontSize: 120 }, label: "c3" },
-        ],
-      },
       {
         id: "t3", kind: "audio", name: "Audio 1", enabled: true, locked: false, opacity: 1, volume: 0.8,
         clips: [
-          { id: "c4", kind: "audio", assetId: "a4", timelineStart: sec(0), timelineEnd: sec(11), sourceIn: sec(0), sourceOut: sec(11), speed: 1, transform: defaultTransform(), opacity: 1, opacityFadeIn: 0, opacityFadeOut: sec(1), volume: 0.8, keyframes: [], label: "c4" },
+          { id: "c4", kind: "audio", assetId: "a4", timelineStart: sec(0), timelineEnd: sec(11), sourceIn: sec(0), sourceOut: sec(11), speed: 1, transform: defaultTransform(), opacity: 1, opacityFadeIn: 0, opacityFadeOut: 0, volume: 0.8, keyframes: [], label: "c4" },
+        ],
+      },
+      {
+        id: "t1", kind: "video", name: "Video 1", enabled: true, locked: false, opacity: 1, volume: 1,
+        clips: [
+          { id: "c1", kind: "video", assetId: "a1", timelineStart: sec(0), timelineEnd: sec(5), sourceIn: sec(0), sourceOut: sec(5), speed: 1, transform: defaultTransform(), opacity: 1, opacityFadeIn: 0, opacityFadeOut: 0, volume: 1, keyframes: [], label: "c1" },
+          { id: "c2", kind: "video", assetId: "a2", timelineStart: sec(5), timelineEnd: sec(11), sourceIn: sec(2), sourceOut: sec(8), speed: 1, transform: defaultTransform(), opacity: 1, opacityFadeIn: 0, opacityFadeOut: 0, volume: 1, keyframes: [], label: "c2" },
+        ],
+      },
+      {
+        id: "t2", kind: "video", name: "Video 2", enabled: true, locked: false, opacity: 1, volume: 1,
+        clips: [
+          { id: "c3", kind: "video", timelineStart: sec(0.5), timelineEnd: sec(3.5), sourceIn: 0, sourceOut: sec(3), speed: 1, transform: { ...defaultTransform(), centerY: 0.82 }, opacity: 1, opacityFadeIn: 0, opacityFadeOut: 0, volume: 1, keyframes: [], text: { ...defaultTextProps(), content: "OCEAN", fontSize: 120 }, label: "c3" },
         ],
       },
     ],

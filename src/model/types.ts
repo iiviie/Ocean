@@ -3,7 +3,10 @@
 import type { Ticks } from "./time";
 
 export type MediaKind = "video" | "image" | "audio" | "lottie";
-export type TrackKind = "video" | "audio" | "text";
+// Only two layer kinds: video (carries visuals — media + text overlays) and
+// audio. Text is no longer its own track; a text clip is just a clip with
+// `text` set living on a video track (PRD §6.3 — layers, not clip taxonomies).
+export type TrackKind = "video" | "audio";
 
 /** Identity used as a cache key for analysis artifacts (PRD §8.4). */
 export interface FileIdentity {
@@ -115,6 +118,10 @@ export interface Clip {
   text?: TextProps;
   keyframes: Keyframe[];
   label?: string; // short human/agent mention name
+  /** When a video clip carries audio, its sound is split onto a linked audio
+   *  clip directly beneath it. Both clips point at each other and move/delete
+   *  together until unlinked (right-click → Unlink). */
+  linkedClipId?: string;
 }
 
 export interface Track {

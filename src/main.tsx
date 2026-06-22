@@ -1,5 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import "@fontsource-variable/inter";
 import "./styles/global.css";
 import { Editor } from "./ui/Editor";
 import { useStore } from "./model/store";

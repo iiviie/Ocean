@@ -37,6 +37,7 @@ export type Command =
   | { type: "trim_clip"; clipId: string; sourceIn?: Ticks; sourceOut?: Ticks }
   | { type: "split_clip"; clipId: string; atTicks: Ticks; newClipId?: string }
   | { type: "delete_clip"; clipId: string; ripple?: boolean }
+  | { type: "unlink_clip"; clipId: string }
   // ---- properties ----
   | { type: "set_transform"; clipId: string; patch: Partial<Transform> }
   | { type: "set_opacity"; clipId: string; opacity: number }
@@ -81,6 +82,98 @@ function sortClips(track: Track): void {
 
 function clipDuration(c: Clip): Ticks {
   return c.timelineEnd - c.timelineStart;
+}
+
+/** Does [aStart,aEnd) intersect [bStart,bEnd)? */
+function rangesOverlap(aStart: Ticks, aEnd: Ticks, bStart: Ticks, bEnd: Ticks): boolean {
+  return aStart < bEnd && bStart < aEnd;
+}
+
+/** Would placing [start, start+dur) on `track` collide with an existing clip
+ *  (ignoring `exceptId`)? Clips never overlap on a track (PRD: a layer is a
+ *  single lane). */
+function wouldOverlap(track: Track, start: Ticks, dur: Ticks, exceptId?: string): boolean {
+  return track.clips.some((c) => c.id !== exceptId && rangesOverlap(start, start + dur, c.timelineStart, c.timelineEnd));
+}
+
+/** Clamp a desired start for moving `clip` within `track` so it butts up flush
+ *  against the nearest neighbor in the direction of travel instead of
+ *  overlapping it ("block / clamp to edge"). Relies on the no-overlap invariant:
+ *  every other clip is wholly left or wholly right of `clip`'s current spot. */
+function clampStartForMove(track: Track, clip: Clip, desired: Ticks): Ticks {
+  const dur = clipDuration(clip);
+  const orig = clip.timelineStart;
+  let start = Math.max(0, desired);
+  for (const o of track.clips) {
+    if (o.id === clip.id) continue;
+    if (start >= orig) {
+      // moving right: can't pass a neighbor sitting to our right
+      if (o.timelineStart >= orig && start + dur > o.timelineStart) start = Math.min(start, o.timelineStart - dur);
+    } else {
+      // moving left: can't pass a neighbor sitting to our left
+      if (o.timelineEnd <= orig && start < o.timelineEnd) start = Math.max(start, o.timelineEnd);
+    }
+  }
+  return Math.max(0, start);
+}
+
+/** Split `clip` at timeline `atTicks`, mutating it into the left half and
+ *  returning a freshly-built right half (added to the track). Built explicitly
+ *  because structuredClone() can't clone an Immer draft proxy. */
+function splitOne(track: Track, clip: Clip, atTicks: Ticks, newId: string): Clip {
+  const offset = atTicks - clip.timelineStart;
+  const srcSplit = clip.sourceIn + Math.round(offset * clip.speed);
+  const right: Clip = {
+    id: newId,
+    kind: clip.kind,
+    assetId: clip.assetId,
+    timelineStart: atTicks,
+    timelineEnd: clip.timelineEnd,
+    sourceIn: srcSplit,
+    sourceOut: clip.sourceOut,
+    speed: clip.speed,
+    transform: { ...clip.transform },
+    opacity: clip.opacity,
+    opacityFadeIn: clip.opacityFadeIn,
+    opacityFadeOut: clip.opacityFadeOut,
+    volume: clip.volume,
+    text: clip.text ? { ...clip.text } : undefined,
+    keyframes: [],
+    label: newId,
+  };
+  clip.timelineEnd = atTicks;
+  clip.sourceOut = srcSplit;
+  track.clips.push(right);
+  sortClips(track);
+  return right;
+}
+
+/** Find a video clip's linked audio partner (or vice-versa). */
+function linkedPartner(project: Project, clip: Clip): { track: Track; clip: Clip; index: number } | null {
+  return clip.linkedClipId ? findClip(project, clip.linkedClipId) : null;
+}
+
+/** The audio track that should sit directly beneath `videoTrack` in the timeline
+ *  display (lower index = lower lane). Reuses the adjacent audio track if there
+ *  is one, otherwise inserts a fresh audio lane right below the video lane so a
+ *  video's sound always lands "right underneath it". */
+function audioTrackBelow(project: Project, videoTrack: Track): Track {
+  const vi = project.tracks.indexOf(videoTrack);
+  const below = project.tracks[vi - 1];
+  if (below && below.kind === "audio") return below;
+  const audioCount = project.tracks.filter((tr) => tr.kind === "audio").length;
+  const track: Track = {
+    id: nextId("t"),
+    kind: "audio",
+    name: `Audio ${audioCount + 1}`,
+    enabled: true,
+    locked: false,
+    opacity: 1,
+    volume: 1,
+    clips: [],
+  };
+  project.tracks.splice(vi, 0, track); // insert below the video lane
+  return track;
 }
 
 /** Compact, agent-friendly description of what changed (PRD §7 diff reporting). */
@@ -129,19 +222,23 @@ export function applyCommand(ctx: ApplyContext, cmd: Command): Diff {
     case "add_clip": {
       const track = project.tracks.find((tr) => tr.id === cmd.trackId);
       if (!track) throw new Error(`track ${cmd.trackId} not found`);
+      const isText = !!cmd.text;
+      if (isText && track.kind !== "video") throw new Error(`text clips live on video tracks, not ${track.kind}`);
       const id = cmd.clipId ?? nextId("c");
       const asset = cmd.assetId ? project.mediaLibrary.find((a) => a.id === cmd.assetId) : undefined;
       let duration = cmd.durationTicks;
       if (duration == null) {
         if (asset && asset.durationTicks > 0) duration = asset.durationTicks;
-        else duration = track.kind === "text" ? 3 * 600 : 5 * 600; // sensible defaults
+        else duration = isText ? 3 * 600 : 5 * 600; // sensible defaults
       }
+      const start = Math.max(0, cmd.atTicks);
+      if (wouldOverlap(track, start, duration)) throw new Error(`clip would overlap an existing clip on ${track.id} at ${t(start)}`);
       const clip: Clip = {
         id,
         kind: track.kind,
         assetId: cmd.assetId,
-        timelineStart: cmd.atTicks,
-        timelineEnd: cmd.atTicks + duration,
+        timelineStart: start,
+        timelineEnd: start + duration,
         sourceIn: 0,
         sourceOut: asset && asset.durationTicks > 0 ? Math.min(duration, asset.durationTicks) : duration,
         speed: 1,
@@ -151,33 +248,85 @@ export function applyCommand(ctx: ApplyContext, cmd: Command): Diff {
         opacityFadeOut: 0,
         volume: 1,
         keyframes: [],
-        text: track.kind === "text" ? { ...defaultTextProps(), ...cmd.text } : undefined,
+        text: isText ? { ...defaultTextProps(), ...cmd.text } : undefined,
         label: id,
       };
       track.clips.push(clip);
       sortClips(track);
-      return `added clip ${id} on ${track.id} at ${t(cmd.atTicks)} (len ${t(duration)})`;
+
+      // A video with sound is split into a linked audio clip on the lane right
+      // beneath it, so the waveform sits "right underneath" the video and the
+      // two move/delete together (until unlinked). The video element is muted in
+      // preview so audio plays from this clip only (no double-play).
+      if (track.kind === "video" && asset && asset.kind === "video" && asset.hasAudio) {
+        const audioTrack = audioTrackBelow(project, track);
+        if (wouldOverlap(audioTrack, start, duration)) throw new Error(`linked audio would overlap on ${audioTrack.id} at ${t(start)}`);
+        const audioId = nextId("c");
+        clip.linkedClipId = audioId;
+        audioTrack.clips.push({
+          id: audioId,
+          kind: "audio",
+          assetId: cmd.assetId,
+          timelineStart: start,
+          timelineEnd: start + duration,
+          sourceIn: clip.sourceIn,
+          sourceOut: clip.sourceOut,
+          speed: 1,
+          transform: defaultTransform(),
+          opacity: 1,
+          opacityFadeIn: 0,
+          opacityFadeOut: 0,
+          volume: 1,
+          keyframes: [],
+          label: audioId,
+          linkedClipId: id,
+        });
+        sortClips(audioTrack);
+        return `added clip ${id} on ${track.id} at ${t(start)} (len ${t(duration)}) + linked audio ${audioId} on ${audioTrack.id}`;
+      }
+      return `added clip ${id} on ${track.id} at ${t(start)} (len ${t(duration)})`;
     }
 
     case "move_clip": {
       const found = findClip(project, cmd.clipId);
       if (!found) throw new Error(`clip ${cmd.clipId} not found`);
       const { track, clip } = found;
-      const dur = clipDuration(clip);
       const from = clip.timelineStart;
-      clip.timelineStart = Math.max(0, cmd.toTicks);
-      clip.timelineEnd = clip.timelineStart + dur;
-      let dest = track;
+
+      // Cross-track move (agent only — the UI never sets toTrackId): place on the
+      // target lane and reject if it would overlap. Linked clips don't follow
+      // across lanes.
       if (cmd.toTrackId && cmd.toTrackId !== track.id) {
         const target = project.tracks.find((tr) => tr.id === cmd.toTrackId);
         if (!target) throw new Error(`track ${cmd.toTrackId} not found`);
         if (target.kind !== track.kind) throw new Error(`cannot move ${track.kind} clip to ${target.kind} track`);
+        const dur = clipDuration(clip);
+        const start = Math.max(0, cmd.toTicks);
+        if (wouldOverlap(target, start, dur)) throw new Error(`clip would overlap on ${target.id} at ${t(start)}`);
+        clip.timelineStart = start;
+        clip.timelineEnd = start + dur;
         track.clips.splice(track.clips.indexOf(clip), 1);
         target.clips.push(clip);
-        dest = target;
+        sortClips(target);
+        return `moved ${clip.id} ${t(from)}→${t(start)} to ${target.id}`;
       }
-      sortClips(dest);
-      return `moved ${clip.id} ${t(from)}→${t(clip.timelineStart)}${dest !== track ? ` to ${dest.id}` : ""}`;
+
+      // In-lane move: clamp flush against neighbors. Linked clips travel by one
+      // shared delta, clamped so neither partner overlaps on its own lane.
+      const partner = linkedPartner(project, clip);
+      const movers = partner ? [found, partner] : [found];
+      let delta = Math.max(0, cmd.toTicks) - clip.timelineStart;
+      for (const m of movers) {
+        const allowed = clampStartForMove(m.track, m.clip, m.clip.timelineStart + delta) - m.clip.timelineStart;
+        delta = delta >= 0 ? Math.min(delta, allowed) : Math.max(delta, allowed);
+      }
+      for (const m of movers) {
+        const dur = clipDuration(m.clip);
+        m.clip.timelineStart += delta;
+        m.clip.timelineEnd = m.clip.timelineStart + dur;
+        sortClips(m.track);
+      }
+      return `moved ${clip.id} ${t(from)}→${t(clip.timelineStart)}${partner ? ` (+linked ${partner.clip.id})` : ""}`;
     }
 
     case "trim_clip": {
@@ -198,39 +347,60 @@ export function applyCommand(ctx: ApplyContext, cmd: Command): Diff {
       const { track, clip } = found;
       if (cmd.atTicks <= clip.timelineStart || cmd.atTicks >= clip.timelineEnd)
         throw new Error(`split point ${t(cmd.atTicks)} is outside clip ${clip.id}`);
-      const offset = cmd.atTicks - clip.timelineStart;
-      const srcSplit = clip.sourceIn + Math.round(offset * clip.speed);
-      const right: Clip = {
-        ...structuredClone(clip),
-        id: cmd.newClipId ?? nextId("c"),
-        timelineStart: cmd.atTicks,
-        sourceIn: srcSplit,
-        keyframes: [],
-      };
-      right.label = right.id;
-      clip.timelineEnd = cmd.atTicks;
-      clip.sourceOut = srcSplit;
-      track.clips.push(right);
-      sortClips(track);
+      const right = splitOne(track, clip, cmd.atTicks, cmd.newClipId ?? nextId("c"));
+
+      // Split the linked partner at the same point so the two right-halves stay
+      // a linked pair. If the point falls outside the partner, drop the link
+      // rather than leave a dangling reference.
+      const partner = linkedPartner(project, clip);
+      if (partner) {
+        if (cmd.atTicks > partner.clip.timelineStart && cmd.atTicks < partner.clip.timelineEnd) {
+          const partnerRight = splitOne(partner.track, partner.clip, cmd.atTicks, nextId("c"));
+          right.linkedClipId = partnerRight.id;
+          partnerRight.linkedClipId = right.id;
+          // clip ⇄ partner.clip links are preserved for the left halves
+          return `split ${clip.id} + ${partner.clip.id} at ${t(cmd.atTicks)} → ${right.id} + ${partnerRight.id}`;
+        }
+        clip.linkedClipId = undefined;
+        partner.clip.linkedClipId = undefined;
+      }
       return `split ${clip.id} at ${t(cmd.atTicks)} → ${clip.id} + ${right.id}`;
     }
 
     case "delete_clip": {
       const found = findClip(project, cmd.clipId);
       if (!found) throw new Error(`clip ${cmd.clipId} not found`);
-      const { track, clip, index } = found;
-      const dur = clipDuration(clip);
-      track.clips.splice(index, 1);
-      if (cmd.ripple) {
-        for (const c of track.clips) {
-          if (c.timelineStart >= clip.timelineEnd) {
-            c.timelineStart -= dur;
-            c.timelineEnd -= dur;
+      // A linked pair (video + its audio) is deleted together.
+      const partner = linkedPartner(project, found.clip);
+      const targets = partner ? [found, partner] : [found];
+      const removedIds: string[] = [];
+      for (const { track, clip } of targets) {
+        const index = track.clips.indexOf(clip);
+        if (index < 0) continue;
+        const dur = clipDuration(clip);
+        track.clips.splice(index, 1);
+        if (cmd.ripple) {
+          for (const c of track.clips) {
+            if (c.timelineStart >= clip.timelineEnd) {
+              c.timelineStart -= dur;
+              c.timelineEnd -= dur;
+            }
           }
         }
+        removedIds.push(clip.id);
       }
-      editor.selectedClipIds = editor.selectedClipIds.filter((id) => id !== clip.id);
-      return `deleted ${clip.id}${cmd.ripple ? " (ripple)" : ""}`;
+      editor.selectedClipIds = editor.selectedClipIds.filter((id) => !removedIds.includes(id));
+      return `deleted ${removedIds.join(" + ")}${cmd.ripple ? " (ripple)" : ""}`;
+    }
+
+    case "unlink_clip": {
+      const found = findClip(project, cmd.clipId);
+      if (!found) throw new Error(`clip ${cmd.clipId} not found`);
+      const partner = linkedPartner(project, found.clip);
+      if (!partner) throw new Error(`clip ${cmd.clipId} is not linked`);
+      found.clip.linkedClipId = undefined;
+      partner.clip.linkedClipId = undefined;
+      return `unlinked ${found.clip.id} ⇄ ${partner.clip.id}`;
     }
 
     case "set_transform": {

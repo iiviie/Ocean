@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
+import { ArrowUp, AtSign } from "lucide-react";
 import { useStore } from "@/model/store";
 import { oceanAgent } from "@/agent/bridge";
+import { cn } from "@/ui/lib/cn";
 
-// The agent panel shows the live command log (so the human SEES every edit the
-// agent makes) and offers a tiny console to drive the same bridge the MCP server
-// will use. This is a placeholder for the real chat-with-Claude UI; the point is
-// to demonstrate the shared command bus end to end.
+// Left column: the agent conversation. Messages stream here and edits the agent
+// makes show inline; the input drives the in-process bridge (and mirrors what an
+// MCP client like Claude Code does).
 export function AgentChat() {
   const log = useStore((s) => s.log);
   const [input, setInput] = useState("");
@@ -30,54 +31,50 @@ export function AgentChat() {
   };
 
   return (
-    <section className="panel panel-inspector" style={{ borderTop: "1px solid var(--line-soft)" }}>
-      <div className="panel-header">
-        <span>Agent</span>
-        <span style={{ color: "var(--text-2)", textTransform: "none", fontWeight: 400 }}>command log</span>
+    <aside className="flex w-[300px] flex-none flex-col bg-card">
+      <div ref={logRef} className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-4">
+        {log.length === 0 && (
+          <div className="space-y-3 text-[13px] leading-relaxed text-muted-foreground">
+            <p className="text-foreground">Tell me what to make.</p>
+            <p>I can cut on the beat, place clips, add captions, balance audio — just describe it.</p>
+            <p className="text-subtle">Every edit I make appears in the timeline and preview live.</p>
+          </div>
+        )}
+        {log.map((e) => (
+          <div key={e.seq} className="flex flex-col gap-1">
+            <span className="text-[10px] font-medium uppercase tracking-wide text-subtle">{e.source}</span>
+            <div
+              className={cn(
+                "self-start rounded-xl px-3 py-2 text-[12.5px] leading-snug",
+                e.error ? "bg-destructive/10 text-destructive" : e.source === "agent" ? "bg-accent-soft text-foreground" : "bg-muted text-muted-foreground",
+              )}
+            >
+              {e.error ? `✗ ${e.error}` : e.diff}
+            </div>
+          </div>
+        ))}
       </div>
-      <div className="agent" style={{ minHeight: 0 }}>
-        <div className="agent-log" ref={logRef}>
-          {log.length === 0 && (
-            <div style={{ color: "var(--text-2)", fontSize: 11 }}>
-              Edits appear here. Try a starter below, or open devtools and call <code>ocean.get_project()</code>.
-            </div>
-          )}
-          {log.map((e) => (
-            <div key={e.seq} className={`agent-line${e.source === "agent" ? " agent-src" : ""}${e.error ? " err" : ""}`}>
-              <span className="src">{e.source}</span> {e.error ? `✗ ${e.error}` : e.diff}
-            </div>
-          ))}
-        </div>
 
-        <div className="starters">
-          <button onClick={() => oceanAgent.dispatch({ type: "add_marker", atTicks: useStore.getState().editor.playheadTicks, kind: "beat" })}>
-            Add beat @playhead
-          </button>
-          <button onClick={() => {
-            // demo: move the title to the lower third + recolor (agent-style edit)
-            oceanAgent.dispatch({ type: "set_transform", clipId: "c3", patch: { centerY: 0.85 } });
-            oceanAgent.dispatch({ type: "set_text", clipId: "c3", patch: { color: "#ffd23a" } });
-          }}>
-            Demo: restyle title
-          </button>
-          <button onClick={() => oceanAgent.dispatch({ type: "set_working", clipIds: ["c1", "c2"] })}>
-            Flag working
-          </button>
-          <button onClick={() => oceanAgent.dispatch({ type: "set_working", clipIds: [] })}>
-            Clear working
-          </button>
-        </div>
-
-        <div className="agent-input">
+      <div className="flex-none p-3">
+        <div className="flex items-end gap-2 rounded-xl border border-border bg-muted px-3 py-2 focus-within:border-primary/60">
+          <AtSign size={15} className="mb-0.5 text-subtle" />
           <input
-            placeholder='ocean.dispatch({ type: "set_zoom", zoom: 80 })'
+            className="min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-subtle"
+            placeholder="Ask, or type @ to reference media"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") run(input); }}
           />
-          <button className="primary" onClick={() => run(input)}>Run</button>
+          <button
+            onClick={() => run(input)}
+            className="grid size-6 flex-none place-items-center rounded-lg bg-primary text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-40"
+            disabled={!input.trim()}
+            title="Send"
+          >
+            <ArrowUp size={14} />
+          </button>
         </div>
       </div>
-    </section>
+    </aside>
   );
 }

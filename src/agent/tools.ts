@@ -4,13 +4,12 @@
 //
 // Agents speak seconds; the model stores integer ticks (PRD §6.3/§7). These
 // adapters convert at the boundary and keep outputs compact.
-import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "@/model/store";
 import { oceanAgent } from "@/agent/bridge";
 import { findClip } from "@/model/selectors";
 import { nextId } from "@/model/ids";
 import { round2, secondsToTicks, ticksToSeconds } from "@/model/time";
-import { inTauri, renderFrame } from "@/engine/render";
+import { inElectron, probeMedia, importDialog } from "@/engine/render";
 import type { Command } from "@/model/commands";
 
 const dispatch = (cmd: Command) => useStore.getState().dispatch(cmd, "agent");
@@ -56,15 +55,49 @@ function addAsset(uri: string, name: string, info: ProbeResult) {
   return { assetId, kind: info.kind, dur: round2(info.durationSecs ?? 0) };
 }
 
-/** UI import: open the native picker, probe, add to library. No-op in browser. */
+/** UI import: native picker in Electron; <input type=file> + object URL in the browser. */
 export async function importViaDialog(): Promise<{ assetId: string } | null> {
-  if (!inTauri) {
-    alert("Importing your own media needs the desktop app — run `pnpm tauri:dev`.");
-    return null;
+  if (inElectron) {
+    const picked = await importDialog();
+    if (!picked) return null;
+    return addAsset(picked.path, picked.name, picked);
   }
-  const picked = await invoke<{ path: string; name: string } & ProbeResult | null>("import_dialog");
-  if (!picked) return null;
-  return addAsset(picked.path, picked.name, picked);
+  const file = await pickFileBrowser();
+  if (!file) return null;
+  const info = await probeBrowser(file);
+  return addAsset(info.url, file.name, info); // uri = blob: URL, loadable by <video>/<img>
+}
+
+function pickFileBrowser(): Promise<File | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "video/*,image/*,audio/*";
+    input.onchange = () => resolve(input.files?.[0] ?? null);
+    input.click();
+  });
+}
+
+/** Probe a picked File client-side (dimensions + duration) and make a blob URL. */
+function probeBrowser(file: File): Promise<{ url: string } & ProbeResult> {
+  const url = URL.createObjectURL(file);
+  const kind = file.type.startsWith("image") ? "image" : file.type.startsWith("audio") ? "audio" : "video";
+  return new Promise((resolve) => {
+    const done = (width: number, height: number, durationSecs: number, hasAudio: boolean) =>
+      resolve({ url, kind, width, height, durationSecs, hasAudio });
+    if (kind === "image") {
+      const img = new Image();
+      img.onload = () => done(img.naturalWidth, img.naturalHeight, 0, false);
+      img.onerror = () => done(0, 0, 0, false);
+      img.src = url;
+    } else {
+      const el = document.createElement(kind === "audio" ? "audio" : "video") as HTMLVideoElement;
+      el.preload = "metadata";
+      el.onloadedmetadata = () => done(el.videoWidth || 0, el.videoHeight || 0, el.duration || 0, true);
+      el.onerror = () => done(0, 0, 0, true);
+      el.src = url;
+    }
+  });
 }
 
 export const tools: Record<string, ToolDef> = {
@@ -88,26 +121,8 @@ export const tools: Record<string, ToolDef> = {
   },
   get_canvas_layout: {
     name: "get_canvas_layout",
-    description: "Spatial awareness at a time: each visible object's normalized box + overlap warnings. In the desktop app these are MEASURED from the real compositor (true geometry). Args: atSec.",
-    run: async (a) => {
-      const atSec = (a.atSec as number) ?? 0;
-      if (inTauri) {
-        return invoke("layout_at", {
-          projectJson: JSON.stringify(useStore.getState().project),
-          tSecs: atSec,
-        });
-      }
-      return oceanAgent.get_canvas_layout(atSec); // browser estimate fallback
-    },
-  },
-  capture_frame: {
-    name: "capture_frame",
-    description: "Render and SEE the actual composited frame at a time (downscaled). Costs image tokens — use sparingly to verify, not to browse. Args: atSec, maxDim? (default 512). Desktop app only.",
-    run: async (a) => {
-      if (!inTauri) throw new Error("capture_frame needs the desktop app (pnpm tauri:dev)");
-      const image = await renderFrame((a.atSec as number) ?? 0, (a.maxDim as number) ?? 512);
-      return { image, atSec: (a.atSec as number) ?? 0 };
-    },
+    description: "Spatial awareness at a time: each visible object's normalized box + overlap warnings. Args: atSec.",
+    run: (a) => oceanAgent.get_canvas_layout((a.atSec as number) ?? 0),
   },
   get_selection: {
     name: "get_selection",
@@ -130,9 +145,10 @@ export const tools: Record<string, ToolDef> = {
     name: "import_media",
     description: "Import a media file (absolute path) into the library; probes real metadata. Returns { assetId, kind, dur }. Desktop app only.",
     run: async (a) => {
-      if (!inTauri) throw new Error("import needs the desktop app (pnpm tauri:dev)");
+      if (!inElectron) throw new Error("import needs the desktop app (pnpm dev)");
       const path = a.path as string;
-      const info = await invoke<{ kind: string; width: number; height: number; durationSecs: number; hasAudio: boolean }>("probe_media", { path });
+      const info = await probeMedia(path);
+      if (!info) throw new Error("probe failed");
       return addAsset(path, path.split("/").pop() ?? path, info);
     },
   },
@@ -140,10 +156,10 @@ export const tools: Record<string, ToolDef> = {
   // ---------- structure ----------
   add_track: {
     name: "add_track",
-    description: "Add a track. Args: kind ('video'|'audio'|'text'), name?. Returns { trackId }.",
+    description: "Add a track/layer. Args: kind ('video'|'audio'), name?. Text overlays live on video tracks — no separate text track. Returns { trackId }.",
     run: (a) => {
       const trackId = nextId("t");
-      const diff = dispatch({ type: "add_track", kind: a.kind as "video" | "audio" | "text", name: a.name as string, trackId });
+      const diff = dispatch({ type: "add_track", kind: a.kind as "video" | "audio", name: a.name as string, trackId });
       return { trackId, diff };
     },
   },
@@ -152,7 +168,7 @@ export const tools: Record<string, ToolDef> = {
   // ---------- clip gestures ----------
   add_clip: {
     name: "add_clip",
-    description: "Place a clip on a track. Args: trackId, assetId?, atSec, durationSec?, text? (for text tracks). Returns { clipId }.",
+    description: "Place a clip on a track. Args: trackId, assetId?, atSec, durationSec?, text? (text clips go on video tracks). Dropping a video with audio auto-creates a linked audio clip on the lane beneath. Returns { clipId }.",
     run: (a) => {
       const clipId = nextId("c");
       const diff = dispatch({
@@ -175,7 +191,8 @@ export const tools: Record<string, ToolDef> = {
       return { newClipId, diff };
     },
   },
-  delete_clip: { name: "delete_clip", description: "Delete a clip. Args: clipId, ripple? (close the gap).", run: (a) => ({ diff: dispatch({ type: "delete_clip", clipId: a.clipId as string, ripple: a.ripple as boolean }) }) },
+  delete_clip: { name: "delete_clip", description: "Delete a clip (and its linked audio/video partner, if any). Args: clipId, ripple? (close the gap).", run: (a) => ({ diff: dispatch({ type: "delete_clip", clipId: a.clipId as string, ripple: a.ripple as boolean }) }) },
+  unlink_clip: { name: "unlink_clip", description: "Unlink a video clip from its auto-created audio clip so they move independently. Args: clipId.", run: (a) => ({ diff: dispatch({ type: "unlink_clip", clipId: a.clipId as string }) }) },
 
   // ---------- properties ----------
   set_transform: {
