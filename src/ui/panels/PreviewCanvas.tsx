@@ -152,22 +152,28 @@ function PreviewObject({ clip, stageW, stageH, canvasW }: { clip: Clip; stageW: 
   };
 
   if (clip.text) {
-    const scaleToStage = stageW / canvasW;
+    const t = clip.text;
+    const px = stageW / canvasW * tr.scale; // canvas-px → stage-px for text metrics
     return (
       <div
         style={{
           ...base,
-          color: clip.text.color,
-          fontFamily: clip.text.fontName,
-          fontSize: clip.text.fontSize * scaleToStage * tr.scale,
-          lineHeight: clip.text.lineHeight,
-          textAlign: clip.text.align,
-          fontWeight: 800,
+          color: t.color,
+          fontFamily: t.fontName,
+          fontSize: t.fontSize * px,
+          lineHeight: t.lineHeight,
+          textAlign: t.align,
+          fontWeight: t.fontWeight ?? 800,
+          fontStyle: t.italic ? "italic" : "normal",
+          letterSpacing: t.letterSpacing != null ? t.letterSpacing * px : undefined,
+          backgroundColor: t.backgroundColor,
+          padding: t.backgroundColor ? `${0.12 * t.fontSize * px}px ${0.3 * t.fontSize * px}px` : undefined,
+          WebkitTextStroke: t.strokeWidth ? `${t.strokeWidth * px}px ${t.strokeColor ?? "#000"}` : undefined,
           whiteSpace: "pre",
           textShadow: "0 2px 14px rgba(0,0,0,.55)",
         }}
       >
-        {clip.text.content}
+        {t.content}
       </div>
     );
   }

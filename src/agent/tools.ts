@@ -393,10 +393,10 @@ export const tools: Record<string, ToolDef> = {
   },
   set_text: {
     name: "set_text",
-    description: "Edit a text clip. Args: clipId, content?, fontName?, fontSize?, color?, align?, lineHeight?.",
+    description: "Edit a text clip. Args: clipId, content?, fontName?, fontSize?, color?, align?, lineHeight?, fontWeight? (100-900), italic?, letterSpacing? (px), backgroundColor? (plate), strokeColor?, strokeWidth? (px).",
     run: (a) => {
       const patch: Record<string, unknown> = {};
-      for (const k of ["content", "fontName", "fontSize", "color", "align", "lineHeight"]) if (a[k] != null) patch[k] = a[k];
+      for (const k of ["content", "fontName", "fontSize", "color", "align", "lineHeight", "fontWeight", "italic", "letterSpacing", "backgroundColor", "strokeColor", "strokeWidth"]) if (a[k] != null) patch[k] = a[k];
       return { diff: dispatch({ type: "set_text", clipId: a.clipId as string, patch }) };
     },
   },

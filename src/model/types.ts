@@ -91,6 +91,13 @@ export interface TextProps {
   color: string;
   align: TextAlign;
   lineHeight: number;
+  // extended styling (all optional; absent = sensible default)
+  fontWeight?: number; // 100..900
+  italic?: boolean;
+  letterSpacing?: number; // px in canvas space
+  backgroundColor?: string; // text box plate (e.g. lower-third)
+  strokeColor?: string; // outline color
+  strokeWidth?: number; // outline width, px in canvas space
 }
 
 export const defaultTextProps = (content = "Text"): TextProps => ({
