@@ -8,6 +8,7 @@ import { useStore } from "@/model/store";
 import { oceanAgent } from "@/agent/bridge";
 import { nextId } from "@/model/ids";
 import { round2, secondsToTicks, ticksToSeconds } from "@/model/time";
+import { findClip } from "@/model/selectors";
 import { inElectron, probeMedia, importDialog, resolveAssetPath, analyzeMedia, analysisStatus, readAnalysis, extractFrame } from "@/engine/render";
 import type { Command } from "@/model/commands";
 
@@ -139,6 +140,26 @@ interface SilenceData {
   silences: { start: number; end: number; dur: number }[];
 }
 
+interface WaveformData {
+  durationSec: number;
+  envHz: number;
+  peak: number;
+  rms: number;
+  points: number[];
+  loud: { start: number; end: number }[];
+  quiet: { start: number; end: number }[];
+  peaks: number[];
+}
+
+interface BeatsData {
+  durationSec: number;
+  method: string;
+  bpm: number;
+  medianIntervalSec: number;
+  beatCount: number;
+  beats: number[];
+}
+
 /** Resolve an asset to its analysis context: the fileIdentity cache key, the
  *  real filesystem path, and its duration in seconds. */
 function analysisCtx(assetId: string) {
@@ -226,7 +247,7 @@ export const tools: Record<string, ToolDef> = {
   // ---------- perception (media → text) ----------
   analyze_media: {
     name: "analyze_media",
-    description: "Kick off perception analysis for an asset (async, non-blocking). Args: assetId, kinds? (default ['shots','silence']; also 'transcript'). Returns per-kind status; poll get_analysis_status or read with get_shots/get_silence/get_transcript. Desktop app only.",
+    description: "Kick off perception analysis for an asset (async, non-blocking). Args: assetId, kinds? (default ['shots','silence']; also 'transcript','beats','waveform'). Returns per-kind status; poll get_analysis_status or read with get_shots/get_silence/get_transcript/get_beats/get_waveform. Desktop app only.",
     run: async (a) => {
       if (!inElectron) throw new Error("analysis needs the desktop app (pnpm dev)");
       const { hash, path, durationSec } = analysisCtx(a.assetId as string);
@@ -354,6 +375,116 @@ export const tools: Record<string, ToolDef> = {
         silences: win.slice(0, CAP),
         ...(win.length > CAP ? { truncated: true, hint: "narrow fromSec/toSec" } : {}),
       };
+    },
+  },
+
+  get_waveform: {
+    name: "get_waveform",
+    description: "Loudness/waveform envelope of an asset's audio as text: a coarse 0–100 curve plus loud spans, quiet spans, prominent hits (peaks), and overall peak/rms — so you can reason about highs/lows and energy. Args: assetId, fromSec?, toSec?. Returns { status } if not ready — run analyze_media kinds:['waveform'].",
+    run: async (a) => {
+      if (!inElectron) throw new Error("analysis needs the desktop app");
+      const { hash, durationSec } = analysisCtx(a.assetId as string);
+      const data = (await readAnalysis(hash, "waveform")) as WaveformData | null;
+      if (!data) {
+        const status = await analysisStatus(hash, ["waveform"]);
+        return { assetId: a.assetId, status: status?.waveform ?? "none" };
+      }
+      const from = (a.fromSec as number) ?? 0;
+      const to = a.toSec != null ? (a.toSec as number) : Infinity;
+      const inWin = (s: number, e: number) => e > from && s < to;
+      return {
+        assetId: a.assetId,
+        durationSec: data.durationSec ?? round2(durationSec),
+        peak: data.peak, rms: data.rms, envHz: data.envHz,
+        points: data.points,
+        loud: data.loud.filter((s) => inWin(s.start, s.end)),
+        quiet: data.quiet.filter((s) => inWin(s.start, s.end)),
+        peaks: data.peaks.filter((t) => t >= from && t <= to),
+      };
+    },
+  },
+
+  get_beats: {
+    name: "get_beats",
+    description: "Beat grid for an asset's audio: bpm, method ('aubio' = real beat-tracking, 'energy' = approximate fallback), and beat timestamps in seconds — for cutting on the beat. Args: assetId, fromSec?, toSec?. Returns { status } if not ready — run analyze_media kinds:['beats'].",
+    run: async (a) => {
+      if (!inElectron) throw new Error("analysis needs the desktop app");
+      const { hash } = analysisCtx(a.assetId as string);
+      const data = (await readAnalysis(hash, "beats")) as BeatsData | null;
+      if (!data) {
+        const status = await analysisStatus(hash, ["beats"]);
+        return { assetId: a.assetId, status: status?.beats ?? "none" };
+      }
+      const from = (a.fromSec as number) ?? 0;
+      const to = a.toSec != null ? (a.toSec as number) : Infinity;
+      const win = data.beats.filter((t) => t >= from && t <= to);
+      const CAP = 400;
+      return {
+        assetId: a.assetId, bpm: data.bpm, method: data.method,
+        durationSec: data.durationSec, total: data.beatCount,
+        beats: win.slice(0, CAP),
+        ...(win.length > CAP ? { truncated: true, hint: "narrow fromSec/toSec" } : {}),
+      };
+    },
+  },
+
+  get_audio_summary: {
+    name: "get_audio_summary",
+    description: "One-shot audio perception for an asset: tempo (bpm + beat count), loudness (peak/rms, loud & quiet spans, prominent hits), silence, and whether a transcript is available. Start here for music/voice before pulling get_beats/get_waveform/get_transcript detail. Args: assetId.",
+    run: async (a) => {
+      if (!inElectron) throw new Error("analysis needs the desktop app");
+      const asset = useStore.getState().project.mediaLibrary.find((x) => x.id === (a.assetId as string));
+      if (!asset) throw new Error(`asset ${a.assetId} not found`);
+      if (!asset.hasAudio) return { assetId: asset.id, hasAudio: false };
+      const { hash, durationSec } = analysisCtx(asset.id);
+      const status = (await analysisStatus(hash, ["beats", "waveform", "silence", "transcript"])) ?? {};
+      const out: Record<string, unknown> = { assetId: asset.id, durationSec: round2(durationSec), status };
+      const beats = status.beats === "ready" ? ((await readAnalysis(hash, "beats")) as BeatsData | null) : null;
+      if (beats) out.tempo = { bpm: beats.bpm, method: beats.method, beats: beats.beatCount };
+      const wave = status.waveform === "ready" ? ((await readAnalysis(hash, "waveform")) as WaveformData | null) : null;
+      if (wave) out.loudness = { peak: wave.peak, rms: wave.rms, loudSpans: wave.loud.length, quietSpans: wave.quiet.length, hits: wave.peaks.length };
+      const sil = status.silence === "ready" ? ((await readAnalysis(hash, "silence")) as SilenceData | null) : null;
+      if (sil) out.silenceSpans = sil.silenceCount;
+      const tr = status.transcript === "ready" ? ((await readAnalysis(hash, "transcript")) as TranscriptData | null) : null;
+      if (tr) out.transcript = { segments: tr.segmentCount, lang: tr.language };
+      out.hint = "missing pieces? run analyze_media kinds:['beats','waveform','silence','transcript']";
+      return out;
+    },
+  },
+
+  mark_beats: {
+    name: "mark_beats",
+    description: "Drop beat markers on the timeline from an asset's beat grid — the fastest way to set up beat-synced cuts. Args: assetId, clipId? (map beats through that clip's placement/trim/speed; omit to use absolute source times from 0), fromSec?, toSec?, replace? (default true: clear existing beat markers first). Returns { added }.",
+    run: async (a) => {
+      if (!inElectron) throw new Error("analysis needs the desktop app");
+      const { hash } = analysisCtx(a.assetId as string);
+      const data = (await readAnalysis(hash, "beats")) as BeatsData | null;
+      if (!data) {
+        const status = await analysisStatus(hash, ["beats"]);
+        return { assetId: a.assetId, status: status?.beats ?? "none", hint: "run analyze_media kinds:['beats'] first" };
+      }
+      const from = (a.fromSec as number) ?? 0;
+      const to = a.toSec != null ? (a.toSec as number) : Infinity;
+      const clip = a.clipId ? findClip(useStore.getState().project, a.clipId as string)?.clip : undefined;
+      if (a.clipId && !clip) throw new Error(`clip ${a.clipId} not found`);
+      if (a.replace !== false) dispatch({ type: "clear_markers", kind: "beat" });
+      let added = 0;
+      const CAP = 600;
+      for (const t of data.beats) {
+        if (t < from || t > to) continue;
+        let atTicks: number;
+        if (clip) {
+          const srcIn = ticksToSeconds(clip.sourceIn);
+          const srcOut = ticksToSeconds(clip.sourceOut);
+          if (t < srcIn || t > srcOut) continue; // beat falls outside the used source window
+          atTicks = clip.timelineStart + sec((t - srcIn) / clip.speed);
+        } else {
+          atTicks = sec(t);
+        }
+        dispatch({ type: "add_marker", atTicks, kind: "beat" });
+        if (++added >= CAP) break;
+      }
+      return { assetId: a.assetId, added, bpm: data.bpm, method: data.method };
     },
   },
 
