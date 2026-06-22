@@ -382,6 +382,7 @@ export const tools: Record<string, ToolDef> = {
     },
   },
   remove_track: { name: "remove_track", description: "Remove a track by id. Args: trackId.", run: (a) => ({ diff: dispatch({ type: "remove_track", trackId: a.trackId as string }) }) },
+  move_track: { name: "move_track", description: "Reorder a track/layer. Args: trackId, toIndex (0 = bottom layer; higher index composites on top).", run: (a) => ({ diff: dispatch({ type: "move_track", trackId: a.trackId as string, toIndex: a.toIndex as number }) }) },
   set_track: {
     name: "set_track",
     description: "Set track/lane properties. Args: trackId, name?, enabled? (false hides a video lane / mutes an audio lane), locked?, opacity? (0..1, video lanes), volume? (0..1, audio lanes).",

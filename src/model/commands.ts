@@ -26,6 +26,7 @@ export type Command =
   | { type: "add_track"; kind: TrackKind; name?: string; trackId?: string }
   | { type: "remove_track"; trackId: string }
   | { type: "set_track"; trackId: string; patch: Partial<Pick<Track, "name" | "enabled" | "locked" | "opacity" | "volume">> }
+  | { type: "move_track"; trackId: string; toIndex: number }
   // ---- clip gestures ----
   | {
       type: "add_clip";
@@ -345,12 +346,17 @@ export function applyCommand(ctx: ApplyContext, cmd: Command): Diff {
       const found = findClip(project, cmd.clipId);
       if (!found) throw new Error(`clip ${cmd.clipId} not found`);
       const { clip } = found;
-      if (cmd.sourceIn != null) clip.sourceIn = Math.max(0, cmd.sourceIn);
+      // Left-edge trim: move the in-point AND the timeline start together so the
+      // RIGHT edge stays put (grab left edge, drag right → shorter from the start).
+      if (cmd.sourceIn != null) {
+        const newIn = Math.max(0, Math.min(cmd.sourceIn, clip.sourceOut - 1));
+        clip.timelineStart = Math.max(0, clip.timelineStart + Math.round((newIn - clip.sourceIn) / clip.speed));
+        clip.sourceIn = newIn;
+      }
+      // Right-edge trim: move the out-point; the timeline end follows (start fixed).
       if (cmd.sourceOut != null) clip.sourceOut = Math.max(clip.sourceIn + 1, cmd.sourceOut);
-      // keep timeline length in sync with trimmed source length (speed = 1 path)
-      const srcLen = Math.round((clip.sourceOut - clip.sourceIn) / clip.speed);
-      clip.timelineEnd = clip.timelineStart + srcLen;
-      return `trimmed ${clip.id} source ${t(clip.sourceIn)}→${t(clip.sourceOut)}`;
+      clip.timelineEnd = clip.timelineStart + Math.round((clip.sourceOut - clip.sourceIn) / clip.speed);
+      return `trimmed ${clip.id} → ${t(clip.timelineStart)}..${t(clip.timelineEnd)} (src ${t(clip.sourceIn)}→${t(clip.sourceOut)})`;
     }
 
     case "split_clip": {
@@ -487,6 +493,16 @@ export function applyCommand(ctx: ApplyContext, cmd: Command): Diff {
       const before = project.markers.length;
       project.markers = cmd.kind ? project.markers.filter((m) => m.kind !== cmd.kind) : [];
       return `cleared ${before - project.markers.length} markers`;
+    }
+
+    case "move_track": {
+      const from = project.tracks.findIndex((tr) => tr.id === cmd.trackId);
+      if (from < 0) throw new Error(`track ${cmd.trackId} not found`);
+      const to = Math.max(0, Math.min(project.tracks.length - 1, Math.round(cmd.toIndex)));
+      if (to === from) return `track ${cmd.trackId} already at ${from}`;
+      const [tr] = project.tracks.splice(from, 1);
+      project.tracks.splice(to, 0, tr);
+      return `moved track ${cmd.trackId} ${from}→${to}`;
     }
 
     case "set_track": {
