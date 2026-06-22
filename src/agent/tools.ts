@@ -33,6 +33,7 @@ interface ProbeResult {
   height: number;
   durationSecs: number;
   hasAudio: boolean;
+  fileIdentity?: { hash: string; size: number; mtime: number };
 }
 
 /** Add a probed asset to the library; returns its new id. Shared by the UI
@@ -46,6 +47,7 @@ function addAsset(uri: string, name: string, info: ProbeResult) {
       kind: (info.kind as "video" | "image" | "audio" | "lottie") ?? "video",
       name,
       uri, // absolute path resolves directly in the compositor
+      fileIdentity: info.fileIdentity, // cache key for analysis artifacts (perception layer)
       durationTicks: Math.round((info.durationSecs ?? 0) * 600),
       naturalWidth: info.width ?? 0,
       naturalHeight: info.height ?? 0,

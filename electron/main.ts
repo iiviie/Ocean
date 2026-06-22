@@ -5,8 +5,37 @@ import { app, BrowserWindow, ipcMain, dialog, protocol, net } from "electron";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { createHash } from "node:crypto";
+import { open, stat } from "node:fs/promises";
 
 const execFileP = promisify(execFile);
+
+// Content identity used as the cache key for analysis artifacts (PERCEPTION_LAYER
+// §1.2). Hashing a multi-GB file at import is too slow, so we hash a cheap
+// signature: first + last 1 MiB plus the byte size. Collision-safe enough for a
+// local cache, sub-100ms. Truncated to 128 bits for a tidy directory name.
+async function fileIdentity(path: string): Promise<{ hash: string; size: number; mtime: number }> {
+  const st = await stat(path);
+  const size = st.size;
+  const CHUNK = 1024 * 1024;
+  const h = createHash("sha256");
+  const fh = await open(path, "r");
+  try {
+    const head = Buffer.alloc(Math.min(CHUNK, size));
+    if (head.length) await fh.read(head, 0, head.length, 0);
+    h.update(head);
+    if (size > CHUNK) {
+      const tailLen = Math.min(CHUNK, size - CHUNK);
+      const tail = Buffer.alloc(tailLen);
+      await fh.read(tail, 0, tailLen, size - tailLen);
+      h.update(tail);
+    }
+  } finally {
+    await fh.close();
+  }
+  h.update(String(size));
+  return { hash: h.digest("hex").slice(0, 32), size, mtime: Math.round(st.mtimeMs) };
+}
 
 // Must be registered before app ready.
 protocol.registerSchemesAsPrivileged([
@@ -55,7 +84,7 @@ async function probe(path: string) {
   const IMAGE = ["png", "mjpeg", "bmp", "webp", "tiff", "gif", "apng"];
   const isImage = hasVideo && !hasAudio && (IMAGE.includes(codec) || nbFrames === 1);
   const kind = isImage ? "image" : hasVideo ? "video" : hasAudio ? "audio" : "video";
-  return { width, height, durationSecs, hasAudio, kind };
+  return { width, height, durationSecs, hasAudio, kind, fileIdentity: await fileIdentity(path) };
 }
 
 app.whenReady().then(() => {

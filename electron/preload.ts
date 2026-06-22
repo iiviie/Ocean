@@ -7,6 +7,7 @@ export interface ProbeInfo {
   height: number;
   durationSecs: number;
   hasAudio: boolean;
+  fileIdentity?: { hash: string; size: number; mtime: number };
 }
 
 const oceanNative = {
