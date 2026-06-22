@@ -114,6 +114,11 @@ interface TranscriptData {
   segments: { id: number; start: number; end: number; text: string }[];
 }
 
+interface SilenceData {
+  silenceCount: number;
+  silences: { start: number; end: number; dur: number }[];
+}
+
 /** Resolve an asset to its analysis context: the fileIdentity cache key, the
  *  real filesystem path, and its duration in seconds. */
 function analysisCtx(assetId: string) {
@@ -180,21 +185,21 @@ export const tools: Record<string, ToolDef> = {
   // ---------- perception (media → text) ----------
   analyze_media: {
     name: "analyze_media",
-    description: "Kick off perception analysis for an asset (async, non-blocking). Args: assetId, kinds? (default ['shots']). Returns per-kind status; then poll get_analysis_status or read with get_shots. Desktop app only.",
+    description: "Kick off perception analysis for an asset (async, non-blocking). Args: assetId, kinds? (default ['shots','silence']; also 'transcript'). Returns per-kind status; poll get_analysis_status or read with get_shots/get_silence/get_transcript. Desktop app only.",
     run: async (a) => {
       if (!inElectron) throw new Error("analysis needs the desktop app (pnpm dev)");
       const { hash, path, durationSec } = analysisCtx(a.assetId as string);
-      const kinds = (a.kinds as string[] | undefined)?.length ? (a.kinds as string[]) : ["shots"];
+      const kinds = (a.kinds as string[] | undefined)?.length ? (a.kinds as string[]) : ["shots", "silence"];
       return { assetId: a.assetId, status: await analyzeMedia(hash, path, kinds, durationSec) };
     },
   },
   get_analysis_status: {
     name: "get_analysis_status",
-    description: "Per-kind analysis status for an asset: ready | pending | none | unsupported. Args: assetId, kinds? (default ['shots']).",
+    description: "Per-kind analysis status for an asset: ready | pending | none | unavailable | unsupported. Args: assetId, kinds? (default ['shots','silence']).",
     run: async (a) => {
       if (!inElectron) throw new Error("analysis needs the desktop app");
       const { hash } = analysisCtx(a.assetId as string);
-      const kinds = (a.kinds as string[] | undefined)?.length ? (a.kinds as string[]) : ["shots"];
+      const kinds = (a.kinds as string[] | undefined)?.length ? (a.kinds as string[]) : ["shots", "silence"];
       return { assetId: a.assetId, status: await analysisStatus(hash, kinds) };
     },
   },
@@ -252,6 +257,30 @@ export const tools: Record<string, ToolDef> = {
         language: data.language,
         total: data.segments.length,
         segments,
+        ...(win.length > CAP ? { truncated: true, hint: "narrow fromSec/toSec" } : {}),
+      };
+    },
+  },
+
+  get_silence: {
+    name: "get_silence",
+    description: "Silent/low-audio spans for an asset (start, end, dur in seconds — gaps & dead air, useful as cut points). Args: assetId, fromSec?, toSec?. Returns { status } if not analyzed — run analyze_media kinds:['silence'].",
+    run: async (a) => {
+      if (!inElectron) throw new Error("analysis needs the desktop app");
+      const { hash } = analysisCtx(a.assetId as string);
+      const data = (await readAnalysis(hash, "silence")) as SilenceData | null;
+      if (!data) {
+        const status = await analysisStatus(hash, ["silence"]);
+        return { assetId: a.assetId, status: status?.silence ?? "none" };
+      }
+      const from = (a.fromSec as number) ?? 0;
+      const to = a.toSec != null ? (a.toSec as number) : Infinity;
+      const win = data.silences.filter((s) => s.end > from && s.start < to);
+      const CAP = 100;
+      return {
+        assetId: a.assetId,
+        total: data.silences.length,
+        silences: win.slice(0, CAP),
         ...(win.length > CAP ? { truncated: true, hint: "narrow fromSec/toSec" } : {}),
       };
     },

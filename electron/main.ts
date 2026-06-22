@@ -138,9 +138,10 @@ async function detectShots(path: string, durationSec: number) {
 }
 
 // ---- transcript (speech-to-text) ----
-// Default backend: the openai-whisper CLI (`pip install openai-whisper`), which
-// writes a JSON sidecar with segment timings that we normalize. Swap the
-// invocation here to target whisper.cpp / faster-whisper instead.
+// Backends are tried in preference order. whisper-ctranslate2 is the
+// faster-whisper (CTranslate2) CLI — ~4-5x faster, lower memory, int8 on CPU —
+// and is flag-compatible with openai-whisper, which is the fallback. Both write
+// an openai-style JSON sidecar with segment timings that we normalize.
 const TRANSCRIPT_SCHEMA_VERSION = 1;
 
 const cmdCache = new Map<string, boolean>();
@@ -158,16 +159,27 @@ async function commandExists(cmd: string): Promise<boolean> {
   return ok;
 }
 
+interface TranscriptBackend { cmd: string; args: (path: string, outDir: string) => string[] }
+const TRANSCRIPT_BACKENDS: TranscriptBackend[] = [
+  // faster-whisper via its OpenAI-compatible CLI (`pip install whisper-ctranslate2`)
+  { cmd: "whisper-ctranslate2", args: (p, o) => [p, "--model", "base", "--output_format", "json", "--output_dir", o, "--verbose", "False"] },
+  // openai-whisper fallback (`pip install openai-whisper`)
+  { cmd: "whisper", args: (p, o) => [p, "--model", "base", "--output_format", "json", "--output_dir", o, "--fp16", "False", "--verbose", "False"] },
+];
+
+async function transcriptBackend(): Promise<TranscriptBackend | null> {
+  for (const b of TRANSCRIPT_BACKENDS) if (await commandExists(b.cmd)) return b;
+  return null;
+}
+
 async function transcribe(path: string, hash: string) {
+  const backend = await transcriptBackend();
+  if (!backend) throw new Error("no transcript backend on PATH");
   const outDir = join(analysisDir(hash), "_whisper");
   await mkdir(outDir, { recursive: true });
-  await execFileP(
-    "whisper",
-    [path, "--model", "base", "--output_format", "json", "--output_dir", outDir, "--fp16", "False", "--verbose", "False"],
-    { maxBuffer: 64 * 1024 * 1024 },
-  );
+  await execFileP(backend.cmd, backend.args(path, outDir), { maxBuffer: 64 * 1024 * 1024 });
   const jf = (await readdir(outDir)).find((f) => f.endsWith(".json"));
-  if (!jf) throw new Error("whisper produced no JSON output");
+  if (!jf) throw new Error("transcript backend produced no JSON output");
   const parsed = JSON.parse(await readFile(join(outDir, jf), "utf8")) as {
     language?: string;
     segments?: { start: number; end: number; text: string }[];
@@ -175,6 +187,35 @@ async function transcribe(path: string, hash: string) {
   const r2 = (n: number) => Math.round(n * 100) / 100;
   const segments = (parsed.segments ?? []).map((s, i) => ({ id: i, start: r2(s.start), end: r2(s.end), text: (s.text ?? "").trim() }));
   return { schemaVersion: TRANSCRIPT_SCHEMA_VERSION, analyzedAt: Date.now(), language: parsed.language ?? "", segmentCount: segments.length, segments };
+}
+
+// ---- silence detection (ffmpeg silencedetect; no extra deps) ----
+// Spans below -30dB for >=0.5s — gaps / dead air, useful as cut points and to
+// distinguish speech vs music coverage. silencedetect prints start/end pairs.
+const SILENCE_SCHEMA_VERSION = 1;
+
+async function detectSilence(path: string) {
+  const { stderr } = await execFileP(
+    "ffmpeg",
+    ["-hide_banner", "-nostats", "-i", path, "-af", "silencedetect=noise=-30dB:d=0.5", "-f", "null", "-"],
+    { maxBuffer: 64 * 1024 * 1024 },
+  );
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const starts: number[] = [];
+  let m: RegExpExecArray | null;
+  const startRe = /silence_start:\s*([0-9]+\.?[0-9]*)/g;
+  while ((m = startRe.exec(stderr))) starts.push(Number(m[1]));
+  const silences: { start: number; end: number; dur: number }[] = [];
+  const endRe = /silence_end:\s*([0-9]+\.?[0-9]*)\s*\|\s*silence_duration:\s*([0-9]+\.?[0-9]*)/g;
+  let i = 0;
+  while ((m = endRe.exec(stderr))) {
+    const end = Number(m[1]);
+    const dur = Number(m[2]);
+    const start = starts[i] ?? end - dur;
+    silences.push({ start: r2(start), end: r2(end), dur: r2(dur) });
+    i++;
+  }
+  return { schemaVersion: SILENCE_SCHEMA_VERSION, analyzedAt: Date.now(), threshold: "-30dB", minDurSec: 0.5, silenceCount: silences.length, silences };
 }
 
 // ---- job orchestration ----
@@ -189,7 +230,8 @@ const inFlight = new Map<string, Promise<void>>(); // key `${hash}:${kind}`
 
 const ANALYZERS: Record<string, Analyzer> = {
   shots: { run: (p, c) => detectShots(p, c.durationSec) },
-  transcript: { run: (p, c) => transcribe(p, c.hash), available: () => commandExists("whisper") },
+  silence: { run: (p) => detectSilence(p) },
+  transcript: { run: (p, c) => transcribe(p, c.hash), available: async () => (await transcriptBackend()) !== null },
 };
 
 // "ok" | "unsupported" (no analyzer) | "unavailable" (backend not installed)
