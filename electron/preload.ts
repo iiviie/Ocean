@@ -23,6 +23,8 @@ const oceanNative = {
     ipcRenderer.invoke("analysis-status", hash, kinds),
   readAnalysis: (hash: string, kind: string): Promise<unknown | null> =>
     ipcRenderer.invoke("read-analysis", hash, kind),
+  extractFrame: (path: string, atSec: number, maxPx: number): Promise<string> =>
+    ipcRenderer.invoke("extract-frame", path, atSec, maxPx),
 };
 
 contextBridge.exposeInMainWorld("oceanNative", oceanNative);

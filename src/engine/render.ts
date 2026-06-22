@@ -19,6 +19,7 @@ interface OceanNative {
   analyzeMedia(hash: string, path: string, kinds: string[], opts: { durationSec: number }): Promise<Record<string, string>>;
   analysisStatus(hash: string, kinds: string[]): Promise<Record<string, string>>;
   readAnalysis(hash: string, kind: string): Promise<unknown | null>;
+  extractFrame(path: string, atSec: number, maxPx: number): Promise<string>;
 }
 
 declare global {
@@ -68,4 +69,8 @@ export async function analysisStatus(hash: string, kinds: string[]) {
 
 export async function readAnalysis(hash: string, kind: string) {
   return native()?.readAnalysis(hash, kind) ?? null;
+}
+
+export async function extractFrame(path: string, atSec: number, maxPx = 512) {
+  return native()?.extractFrame(path, atSec, maxPx) ?? null;
 }

@@ -87,6 +87,19 @@ async function probe(path: string) {
   return { width, height, durationSecs, hasAudio, kind, fileIdentity: await fileIdentity(path) };
 }
 
+// ---- single-frame extraction (the model's vision escape hatch) ----
+// Source-asset frame grab via ffmpeg (-ss before -i = fast seek). Returns a PNG
+// data URL; the MCP server turns {image:"data:..."} into an image block.
+async function extractFrame(path: string, atSec: number, maxPx: number): Promise<string> {
+  const { stdout } = await execFileP(
+    "ffmpeg",
+    ["-hide_banner", "-nostats", "-ss", String(Math.max(0, atSec)), "-i", path, "-frames:v", "1",
+      "-vf", `scale=${Math.max(16, Math.round(maxPx))}:-2`, "-f", "image2pipe", "-vcodec", "png", "-"],
+    { encoding: "buffer", maxBuffer: 32 * 1024 * 1024 },
+  );
+  return `data:image/png;base64,${(stdout as unknown as Buffer).toString("base64")}`;
+}
+
 // ---- analysis cache (out-of-band, keyed by fileIdentity hash) ----
 // Heavy artifacts (shots, transcript, …) live here, NOT in the document model.
 // Tools resolve them on demand and store only lightweight refs on the asset.
@@ -296,6 +309,7 @@ app.whenReady().then(() => {
   });
   ipcMain.handle("analysis-status", (_e, hash: string, kinds: string[]) => analysisStatus(hash, kinds));
   ipcMain.handle("read-analysis", (_e, hash: string, kind: string) => readAnalysis(hash, kind));
+  ipcMain.handle("extract-frame", (_e, path: string, atSec: number, maxPx: number) => extractFrame(path, atSec, maxPx));
   ipcMain.handle("import-dialog", async () => {
     const res = await dialog.showOpenDialog({
       properties: ["openFile"],

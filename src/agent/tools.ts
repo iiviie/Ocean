@@ -9,7 +9,7 @@ import { oceanAgent } from "@/agent/bridge";
 import { findClip } from "@/model/selectors";
 import { nextId } from "@/model/ids";
 import { round2, secondsToTicks, ticksToSeconds } from "@/model/time";
-import { inElectron, probeMedia, importDialog, resolveAssetPath, analyzeMedia, analysisStatus, readAnalysis } from "@/engine/render";
+import { inElectron, probeMedia, importDialog, resolveAssetPath, analyzeMedia, analysisStatus, readAnalysis, extractFrame } from "@/engine/render";
 import type { Command } from "@/model/commands";
 
 const dispatch = (cmd: Command) => useStore.getState().dispatch(cmd, "agent");
@@ -313,6 +313,20 @@ export const tools: Record<string, ToolDef> = {
         silences: win.slice(0, CAP),
         ...(win.length > CAP ? { truncated: true, hint: "narrow fromSec/toSec" } : {}),
       };
+    },
+  },
+
+  get_frame: {
+    name: "get_frame",
+    description: "Render one frame of a SOURCE asset at a time as an image the model can SEE (≤512px). Args: assetId, atSec, maxPx? (default 512). Use sparingly — the text tools (get_shots/get_transcript/get_silence) are far cheaper; reach for a frame only at a genuinely ambiguous decision point. Desktop app only.",
+    run: async (a) => {
+      if (!inElectron) throw new Error("frame extraction needs the desktop app");
+      const asset = useStore.getState().project.mediaLibrary.find((x) => x.id === (a.assetId as string));
+      if (!asset) throw new Error(`asset ${a.assetId} not found`);
+      const atSec = Math.max(0, (a.atSec as number) ?? 0);
+      const maxPx = (a.maxPx as number) ?? 512;
+      const image = await extractFrame(resolveAssetPath(asset.uri), atSec, maxPx);
+      return { assetId: asset.id, atSec: round2(atSec), image };
     },
   },
 
