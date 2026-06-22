@@ -367,15 +367,27 @@ export function applyCommand(ctx: ApplyContext, cmd: Command): Diff {
     case "trim_clip": {
       const found = findClip(project, cmd.clipId);
       if (!found) throw new Error(`clip ${cmd.clipId} not found`);
-      const { track, clip } = found;
-      // Neighbours on the same lane bound how far an edge can travel (clips never
-      // overlap). Computed before mutating so the bounds reflect the start state.
-      const leftBound = neighborEnd(track, clip);
-      const rightBound = neighborStart(track, clip);
+      const { clip } = found;
+      // A still-linked partner (video⇄audio) trims in lockstep so the pair stays
+      // aligned; unlink first to trim them independently.
+      const partner = linkedPartner(project, clip);
+      const set = partner ? [found, partner] : [found];
+
+      // Neighbour bounds across the whole linked set (clips never overlap), and
+      // the source-length cap: real media can only be extended up to its original
+      // content. Text overlays (and stills) have no source, so they stretch freely.
+      let leftBound = 0;
+      let rightBound = Infinity;
+      for (const m of set) {
+        leftBound = Math.max(leftBound, neighborEnd(m.track, m.clip));
+        rightBound = Math.min(rightBound, neighborStart(m.track, m.clip));
+      }
+      const asset = clip.assetId ? project.mediaLibrary.find((a) => a.id === clip.assetId) : undefined;
+      const maxSourceOut = asset && asset.durationTicks > 0 ? asset.durationTicks : Infinity;
 
       // Left-edge trim: in-point and timeline start move together so the RIGHT
-      // edge stays put. Clamp the start against 0 and the left neighbour, then
-      // back-solve the in-point from the clamped start so source stays in sync.
+      // edge stays put. Clamp start ≥ 0 and the left neighbour, then back-solve
+      // the in-point (which also can't go below the start of the source content).
       if (cmd.sourceIn != null) {
         const desiredIn = Math.max(0, Math.min(cmd.sourceIn, clip.sourceOut - 1));
         let newStart = clip.timelineStart + Math.round((desiredIn - clip.sourceIn) / clip.speed);
@@ -385,17 +397,26 @@ export function applyCommand(ctx: ApplyContext, cmd: Command): Diff {
         clip.sourceIn = newIn;
         clip.timelineStart = Math.max(0, newStart);
       }
-      // Right-edge trim: out-point moves; the timeline end follows (start fixed).
-      // Clamp the end against the right neighbour, then back-solve the out-point.
+      // Right-edge trim: out-point moves; timeline end follows (start fixed).
+      // Clamp against the right neighbour AND the source length (no extending a
+      // clip past the end of its real footage).
       if (cmd.sourceOut != null) {
-        const desiredOut = Math.max(clip.sourceIn + 1, cmd.sourceOut);
+        const desiredOut = Math.max(clip.sourceIn + 1, Math.min(cmd.sourceOut, maxSourceOut));
         let newEnd = clip.timelineStart + Math.round((desiredOut - clip.sourceIn) / clip.speed);
         newEnd = Math.min(rightBound, newEnd);
         const newOut = clip.sourceIn + Math.round((newEnd - clip.timelineStart) * clip.speed);
-        clip.sourceOut = Math.max(clip.sourceIn + 1, newOut);
+        clip.sourceOut = Math.max(clip.sourceIn + 1, Math.min(newOut, maxSourceOut));
       }
       clip.timelineEnd = clip.timelineStart + Math.round((clip.sourceOut - clip.sourceIn) / clip.speed);
-      return `trimmed ${clip.id} → ${t(clip.timelineStart)}..${t(clip.timelineEnd)} (src ${t(clip.sourceIn)}→${t(clip.sourceOut)})`;
+
+      // Mirror the result onto the linked partner (same asset, same placement).
+      if (partner) {
+        partner.clip.sourceIn = clip.sourceIn;
+        partner.clip.sourceOut = clip.sourceOut;
+        partner.clip.timelineStart = clip.timelineStart;
+        partner.clip.timelineEnd = clip.timelineEnd;
+      }
+      return `trimmed ${clip.id}${partner ? ` (+linked ${partner.clip.id})` : ""} → ${t(clip.timelineStart)}..${t(clip.timelineEnd)} (src ${t(clip.sourceIn)}→${t(clip.sourceOut)})`;
     }
 
     case "split_clip": {

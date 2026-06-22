@@ -51,7 +51,11 @@ export function Timeline() {
   const laneWidth = durSec * zoom;
   const pxPerTick = zoom / 600;
 
-  const step = zoom < 12 ? 10 : zoom < 30 ? 5 : zoom < 80 ? 2 : 1;
+  // Pixel-aware ruler step: pick the smallest "nice" interval whose on-screen
+  // width clears MIN_LABEL_PX so labels never pile up — at any zoom or duration.
+  const MIN_LABEL_PX = 76;
+  const NICE = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200];
+  const step = NICE.find((n) => n * zoom >= MIN_LABEL_PX) ?? NICE[NICE.length - 1];
   const ruler: number[] = [];
   for (let s = 0; s <= durSec; s += step) ruler.push(s);
 
