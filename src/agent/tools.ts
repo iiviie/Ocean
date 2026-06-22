@@ -409,6 +409,15 @@ export const tools: Record<string, ToolDef> = {
       return { diff: dispatch({ type: "set_color", clipId: a.clipId as string, patch }) };
     },
   },
+  set_style: {
+    name: "set_style",
+    description: "Set a visual clip's appearance/compositing. Args: clipId, blendMode? ('normal'|'multiply'|'screen'|'overlay'|'darken'|'lighten'|'difference'|'add'), cornerRadius? (0..1, 1=pill), borderColor?, borderWidth? (px), shadow? (bool).",
+    run: (a) => {
+      const patch: Record<string, unknown> = {};
+      for (const k of ["blendMode", "cornerRadius", "borderColor", "borderWidth", "shadow"]) if (a[k] != null) patch[k] = a[k];
+      return { diff: dispatch({ type: "set_style", clipId: a.clipId as string, patch }) };
+    },
+  },
   set_opacity: { name: "set_opacity", description: "Set clip opacity 0..1. Args: clipId, opacity.", run: (a) => ({ diff: dispatch({ type: "set_opacity", clipId: a.clipId as string, opacity: a.opacity as number }) }) },
   set_fade: { name: "set_fade", description: "Fade a clip in/out — opacity for visual clips, volume for audio clips. Args: clipId, fadeInSec?, fadeOutSec?.", run: (a) => ({ diff: dispatch({ type: "set_fade", clipId: a.clipId as string, fadeInTicks: a.fadeInSec != null ? sec(a.fadeInSec as number) : undefined, fadeOutTicks: a.fadeOutSec != null ? sec(a.fadeOutSec as number) : undefined }) }) },
   set_volume: { name: "set_volume", description: "Set clip volume 0..1. Args: clipId, volume.", run: (a) => ({ diff: dispatch({ type: "set_volume", clipId: a.clipId as string, volume: a.volume as number }) }) },

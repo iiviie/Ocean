@@ -183,10 +183,21 @@ function PreviewObject({ clip, stageW, stageH, canvasW }: { clip: Clip; stageW: 
   const h = natH * fit * tr.scale;
 
   const filter = colorFilter(clip.color);
+  const st = clip.style;
+  const blend = st?.blendMode && st.blendMode !== "normal" ? (st.blendMode === "add" ? "plus-lighter" : st.blendMode) : undefined;
+  const appearance: React.CSSProperties = st
+    ? {
+        mixBlendMode: blend as React.CSSProperties["mixBlendMode"],
+        borderRadius: st.cornerRadius ? `${Math.max(0, Math.min(1, st.cornerRadius)) * 50}%` : undefined,
+        border: st.borderWidth ? `${st.borderWidth * (stageW / canvasW)}px solid ${st.borderColor ?? "#fff"}` : undefined,
+        boxShadow: st.shadow ? "0 8px 30px rgba(0,0,0,0.5)" : undefined,
+      }
+    : {};
+  const mediaStyle = { ...base, width: w, height: h, objectFit: "cover" as const, filter, ...appearance };
   if (asset.kind === "image") {
-    return <img src={mediaUrl(asset.uri)} alt="" style={{ ...base, width: w, height: h, objectFit: "cover", filter }} draggable={false} />;
+    return <img src={mediaUrl(asset.uri)} alt="" style={mediaStyle} draggable={false} />;
   }
-  return <PreviewVideo clip={clip} asset={asset} style={{ ...base, width: w, height: h, objectFit: "cover", filter }} />;
+  return <PreviewVideo clip={clip} asset={asset} style={mediaStyle} />;
 }
 
 function PreviewVideo({ clip, asset, style }: { clip: Clip; asset: MediaAsset; style: React.CSSProperties }) {

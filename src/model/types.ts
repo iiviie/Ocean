@@ -82,6 +82,19 @@ export interface ColorAdjust {
   filter?: FilterPreset;
 }
 
+export type BlendMode =
+  | "normal" | "multiply" | "screen" | "overlay"
+  | "darken" | "lighten" | "difference" | "add";
+
+/** Appearance / compositing for a visual clip. All fields optional. */
+export interface ClipStyle {
+  blendMode?: BlendMode;
+  cornerRadius?: number; // 0..1 fraction of the smaller side (1 = pill)
+  borderColor?: string;
+  borderWidth?: number; // px in canvas space
+  shadow?: boolean; // tasteful drop shadow
+}
+
 export type TextAlign = "left" | "center" | "right";
 
 export interface TextProps {
@@ -137,6 +150,7 @@ export interface Clip {
   speed: number; // 1 = normal
   transform: Transform;
   color?: ColorAdjust; // color correction (video/image); absent = neutral
+  style?: ClipStyle; // appearance/compositing (blend, radius, border, shadow)
   opacity: number; // 0..1
   opacityFadeIn: Ticks;
   opacityFadeOut: Ticks;
