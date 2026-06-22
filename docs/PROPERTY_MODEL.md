@@ -103,12 +103,12 @@ See `TextProps` (`types.ts:69`).
 | `color` | Fill color | hex / rgba | ✅ | `set_text` |
 | `align` | Horizontal alignment | left/center/right | ✅ | `set_text` |
 | `lineHeight` | Leading multiplier | × (e.g. 1.2) | ✅ rendered; settable via `set_text`; no UI control | `set_text` |
-| `fontWeight` | Weight | 100..900 | ➕ | `set_text` |
-| `italic` | Italic style | bool | ➕ | `set_text` |
-| `letterSpacing` | Tracking | px / em | ➕ | `set_text` |
-| `backgroundColor` | Text box fill (lower-third plate) | hex / rgba | ➕ | `set_text` |
-| `stroke` | Outline (width + color) | px + hex | ➕ | `set_text` |
-| `shadow` | Text shadow | px + hex | ➕ | `set_text` |
+| `fontWeight` | Weight | 100..900 | ✅ | `set_text` |
+| `italic` | Italic style | bool | ✅ | `set_text` |
+| `letterSpacing` | Tracking | px (canvas) | ✅ | `set_text` |
+| `backgroundColor` | Text box fill (lower-third plate) | hex / rgba | ✅ | `set_text` |
+| `strokeColor` / `strokeWidth` | Outline (color + width) | hex + px | ✅ | `set_text` |
+| `shadow` | Text shadow | px + hex | ⚠️ hardcoded (not yet configurable) | `set_text` |
 | `verticalAlign` / `maxWidth` | Box vertical align / wrap width | enum / normalized | ➕ | `set_text` |
 
 ### 2.7 Animation — *change over time* (cross-cutting)
@@ -188,7 +188,7 @@ One property group ↔ one command keeps the surface learnable. ✅ implemented,
 | Appearance | `set_opacity`, `set_fade` | same | ✅ (blend/radius/border/shadow ➕ → `set_style`) |
 | Color | `set_color` | `set_color` | ✅ core grade + filter presets (temp/exposure/LUT ➕) |
 | Audio | `set_volume`, `set_fade{audio}`, `set_pan` | same | ✅ volume; fades/pan ➕ |
-| Typography | `set_text` | `set_text` | ✅ core (incl. `lineHeight`); extended props ➕ |
+| Typography | `set_text` | `set_text` | ✅ core + weight/italic/letterSpacing/bg-plate/stroke (shadow, vAlign ➕) |
 | Animation | `add_keyframe` / `remove_keyframe` / `clear_keyframes` | same | ➕ |
 | Track-level | `set_track` | `set_track` | ✅ |
 | Canvas-level | `set_canvas` | `set_canvas` | ✅ |

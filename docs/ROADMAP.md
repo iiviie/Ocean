@@ -20,7 +20,7 @@ There are two parallel workstreams. **A — Manipulation** (what the agent can c
 - [ ] **Audio-aware `set_fade`** — today it only sets *opacity* fades; on an audio clip that's silent-effect. Generalize: fade the natural channel per clip kind (visual→opacity, audio→volume), or add `audioFadeIn/Out`. *Gap noted in `PROPERTY_MODEL.md §2.5`.* Wire in `audio.ts reconcile()`.
 - [x] **`set_color`** — brightness/contrast/saturation/hue + named filter presets (grayscale/sepia/invert/vintage). `Clip.color` → CSS `filter` on the media element in `PreviewCanvas`. Filter-string math verified. *(temp/tint/exposure/LUT still ➕)*
 - [ ] **`set_pan`** — stereo pan via Web Audio `StereoPannerNode` in `audio.ts` (`el.volume` path is mono today). *(§2.5)*
-- [ ] **Extended typography** on `set_text` — `fontWeight`, `italic`, `letterSpacing`, `backgroundColor`, `stroke`, `shadow`. Extend `TextProps`; render in `PreviewCanvas`. *(§2.6)*
+- [x] **Extended typography** on `set_text` — `fontWeight`, `italic`, `letterSpacing`, `backgroundColor` (plate), `strokeColor`/`strokeWidth`. Rendered in `PreviewCanvas`. *(configurable text shadow + vertical-align still ➕)*
 - [ ] **`set_style`** — appearance/compositing: `blendMode` (CSS `mix-blend-mode`), `cornerRadius`, `border`, `shadow`. *(§2.3)*
 - [ ] **UI controls** for `set_track` (lane header: mute/hide/lock) and `set_canvas` (Format panel becomes editable) — `Timeline.tsx`, `Inspector.tsx`. *(humans get the same powers as the agent)*
 
