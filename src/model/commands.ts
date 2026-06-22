@@ -5,6 +5,7 @@
 // (PRD §8.1/§8.3 lesson).
 import type {
   Clip,
+  ColorAdjust,
   EditorState,
   MediaAsset,
   Project,
@@ -41,6 +42,7 @@ export type Command =
   | { type: "unlink_clip"; clipId: string }
   // ---- properties ----
   | { type: "set_transform"; clipId: string; patch: Partial<Transform> }
+  | { type: "set_color"; clipId: string; patch: Partial<ColorAdjust> }
   | { type: "set_opacity"; clipId: string; opacity: number }
   | { type: "set_fade"; clipId: string; fadeInTicks?: Ticks; fadeOutTicks?: Ticks }
   | { type: "set_volume"; clipId: string; volume: number }
@@ -417,6 +419,13 @@ export function applyCommand(ctx: ApplyContext, cmd: Command): Diff {
       Object.assign(found.clip.transform, cmd.patch);
       const keys = Object.keys(cmd.patch).join(",");
       return `set transform[${keys}] on ${cmd.clipId}`;
+    }
+
+    case "set_color": {
+      const found = findClip(project, cmd.clipId);
+      if (!found) throw new Error(`clip ${cmd.clipId} not found`);
+      found.clip.color = { ...found.clip.color, ...cmd.patch };
+      return `set color[${Object.keys(cmd.patch).join(",")}] on ${cmd.clipId}`;
     }
 
     case "set_opacity": {

@@ -400,6 +400,15 @@ export const tools: Record<string, ToolDef> = {
       return { diff: dispatch({ type: "set_text", clipId: a.clipId as string, patch }) };
     },
   },
+  set_color: {
+    name: "set_color",
+    description: "Color-correct a video/image clip. Args: clipId, brightness? (-1..1, 0=none), contrast? (-1..1), saturation? (0..2, 1=none), hue? (deg), filter? ('none'|'grayscale'|'sepia'|'invert'|'vintage').",
+    run: (a) => {
+      const patch: Record<string, unknown> = {};
+      for (const k of ["brightness", "contrast", "saturation", "hue", "filter"]) if (a[k] != null) patch[k] = a[k];
+      return { diff: dispatch({ type: "set_color", clipId: a.clipId as string, patch }) };
+    },
+  },
   set_opacity: { name: "set_opacity", description: "Set clip opacity 0..1. Args: clipId, opacity.", run: (a) => ({ diff: dispatch({ type: "set_opacity", clipId: a.clipId as string, opacity: a.opacity as number }) }) },
   set_fade: { name: "set_fade", description: "Set opacity fades. Args: clipId, fadeInSec?, fadeOutSec?.", run: (a) => ({ diff: dispatch({ type: "set_fade", clipId: a.clipId as string, fadeInTicks: a.fadeInSec != null ? sec(a.fadeInSec as number) : undefined, fadeOutTicks: a.fadeOutSec != null ? sec(a.fadeOutSec as number) : undefined }) }) },
   set_volume: { name: "set_volume", description: "Set clip volume 0..1. Args: clipId, volume.", run: (a) => ({ diff: dispatch({ type: "set_volume", clipId: a.clipId as string, volume: a.volume as number }) }) },

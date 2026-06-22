@@ -3,12 +3,33 @@ import { Play, Pause, SkipBack } from "lucide-react";
 import { useStore } from "@/model/store";
 import { clipsAt, projectDurationTicks } from "@/model/selectors";
 import { formatTimecodeFrames, ticksToSeconds } from "@/model/time";
-import type { Clip, MediaAsset } from "@/model/types";
+import type { Clip, ColorAdjust, MediaAsset } from "@/model/types";
 import { mediaUrl, inElectron } from "@/engine/render";
 import { useAudioPlayback } from "@/engine/audio";
 import { Button } from "@/ui/components/Button";
 
 const gcdv = (a: number, b: number): number => (b === 0 ? a : gcdv(b, a % b));
+
+// Named filter "looks" → CSS filter fragments.
+const FILTER_PRESETS: Record<string, string> = {
+  grayscale: "grayscale(1)",
+  sepia: "sepia(0.8)",
+  invert: "invert(1)",
+  vintage: "sepia(0.35) contrast(1.1) brightness(1.05) saturate(1.25)",
+};
+
+/** Build a CSS `filter` string from a clip's color correction (video/image). */
+function colorFilter(c?: ColorAdjust): string | undefined {
+  if (!c) return undefined;
+  const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
+  const parts: string[] = [];
+  if (c.brightness != null) parts.push(`brightness(${(1 + clamp(c.brightness, -1, 1)).toFixed(3)})`);
+  if (c.contrast != null) parts.push(`contrast(${(1 + clamp(c.contrast, -1, 1)).toFixed(3)})`);
+  if (c.saturation != null) parts.push(`saturate(${clamp(c.saturation, 0, 2).toFixed(3)})`);
+  if (c.hue != null) parts.push(`hue-rotate(${Math.round(c.hue)}deg)`);
+  if (c.filter && c.filter !== "none" && FILTER_PRESETS[c.filter]) parts.push(FILTER_PRESETS[c.filter]);
+  return parts.length ? parts.join(" ") : undefined;
+}
 
 // Smooth preview: native <video>/<img> + text composited in the renderer with
 // GPU-accelerated CSS transforms. The browser decodes video natively, so
@@ -158,10 +179,11 @@ function PreviewObject({ clip, stageW, stageH, canvasW }: { clip: Clip; stageW: 
   const w = natW * fit * tr.scale;
   const h = natH * fit * tr.scale;
 
+  const filter = colorFilter(clip.color);
   if (asset.kind === "image") {
-    return <img src={mediaUrl(asset.uri)} alt="" style={{ ...base, width: w, height: h, objectFit: "cover" }} draggable={false} />;
+    return <img src={mediaUrl(asset.uri)} alt="" style={{ ...base, width: w, height: h, objectFit: "cover", filter }} draggable={false} />;
   }
-  return <PreviewVideo clip={clip} asset={asset} style={{ ...base, width: w, height: h, objectFit: "cover" }} />;
+  return <PreviewVideo clip={clip} asset={asset} style={{ ...base, width: w, height: h, objectFit: "cover", filter }} />;
 }
 
 function PreviewVideo({ clip, asset, style }: { clip: Clip; asset: MediaAsset; style: React.CSSProperties }) {

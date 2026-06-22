@@ -69,6 +69,19 @@ export const defaultTransform = (): Transform => ({
   flipV: false,
 });
 
+/** Named one-shot color "looks" — higher conversational value for an agent than
+ *  raw sliders (PROPERTY_MODEL §2.4 / appendix). */
+export type FilterPreset = "none" | "grayscale" | "sepia" | "invert" | "vintage";
+
+/** Color correction for video/image clips. All fields optional; absent = neutral. */
+export interface ColorAdjust {
+  brightness?: number; // -1..1, 0 = none
+  contrast?: number; // -1..1, 0 = none
+  saturation?: number; // 0..2, 1 = none
+  hue?: number; // degrees, -180..180
+  filter?: FilterPreset;
+}
+
 export type TextAlign = "left" | "center" | "right";
 
 export interface TextProps {
@@ -116,6 +129,7 @@ export interface Clip {
   sourceOut: Ticks;
   speed: number; // 1 = normal
   transform: Transform;
+  color?: ColorAdjust; // color correction (video/image); absent = neutral
   opacity: number; // 0..1
   opacityFadeIn: Ticks;
   opacityFadeOut: Ticks;
