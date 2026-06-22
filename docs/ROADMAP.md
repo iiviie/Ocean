@@ -40,16 +40,16 @@ There are two parallel workstreams. **A — Manipulation** (what the agent can c
 
 ## B. Perception workstream  *(`PERCEPTION_LAYER.md`)*
 
-### B0 — Plumbing (MVP blocker, no perception yet)
-- [ ] Populate `fileIdentity` (partial head+tail+size hash) in the probe path → `addAsset`
-- [ ] `set_asset_analysis` command + applier (write handles onto `MediaAsset.analysis`)
-- [ ] Out-of-band cache `~/.ocean/cache/<hash>/…` + read/write helpers
-- [ ] `analyze_media` + `get_analysis_status` async job tools (register in both catalogs)
+### B0 — Plumbing ✅ (done this pass)
+- [x] `fileIdentity` (head+tail+size sha256, 128-bit) computed in the Electron probe path → `addAsset`
+- [x] `set_asset_analysis` command + applier (handles onto `MediaAsset.analysis`)
+- [x] Out-of-band cache `userData/analysis/<hash>/<kind>.json` + read/write helpers (chose Electron `userData` over `~/.ocean`)
+- [x] `analyze_media` + `get_analysis_status` async job tools (start + poll; in both catalogs). Cache-first (re-analysis is a no-op).
 
 ### B1 — MVP perception (highest ROI, light deps)
-- [ ] Shots via ffmpeg `scdet` + mafd motion bucket + representative frames → `get_shots`
+- [x] **Shots** via ffmpeg `select=gt(scene,0.4)`+`showinfo` → `get_shots` (windowed, capped 60). Verified on ffmpeg 8.1.1. *(motion bucket + representative frames deferred — timing only for now)*
+- [~] **Transcript** (segment layer) via the openai-whisper CLI → `get_transcript`. Wired with a backend-availability check (reports `unavailable` until a backend is installed). ◆ **backend choice** — happy path unverified locally (no whisper on this machine).
 - [ ] Silence + speech/music classification (Silero VAD + inaSpeechSegmenter) → branching + `get_media_summary`
-- [ ] Transcript (segment layer) via faster-whisper int8 → `get_transcript`
 - [ ] Spatial faces (MediaPipe in renderer Worker) → protect/safe/suggest-caption rects → `get_shot_layout`
 - [ ] `get_frame` escape hatch (shared with A3)
 
