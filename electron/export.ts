@@ -26,7 +26,7 @@ interface Clip {
   transform: Transform; color?: ColorAdjust; opacity: number; opacityFadeIn: number; opacityFadeOut: number;
   volume: number; text?: TextProps;
 }
-interface Track { id: string; kind: string; enabled: boolean; clips: Clip[]; volume: number }
+interface Track { id: string; kind: string; enabled: boolean; clips: Clip[]; volume: number; opacity?: number }
 interface Asset { id: string; kind: string; uri: string; naturalWidth: number; naturalHeight: number }
 interface Canvas { width: number; height: number; fps: number; backgroundColor: string }
 export interface ProjectDoc { canvas: Canvas; mediaLibrary: Asset[]; tracks: Track[] }
@@ -149,7 +149,8 @@ export function buildExportArgs(project: ProjectDoc, opts: ExportOpts, fontFile?
       if (clip.transform.rotation) chain.push(`rotate=${r2((clip.transform.rotation * Math.PI) / 180)}:c=none`);
       chain.push(...colorFilters(clip.color));
       chain.push("format=yuva420p");
-      if (clip.opacity < 1) chain.push(`colorchannelmixer=aa=${r2(clip.opacity)}`);
+      const effOpacity = clip.opacity * (tr.opacity ?? 1); // clip × track-level opacity
+      if (effOpacity < 1) chain.push(`colorchannelmixer=aa=${r2(effOpacity)}`);
       const fi = sec(clip.opacityFadeIn);
       const fo = sec(clip.opacityFadeOut);
       if (fi > 0) chain.push(`fade=t=in:st=0:d=${r2(fi)}:alpha=1`);
