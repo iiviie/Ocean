@@ -98,8 +98,8 @@ export function PreviewCanvas() {
           className="relative overflow-hidden shadow-2xl ring-1 ring-black/40"
           style={{ width: stage.w, height: stage.h, background: project.canvas.backgroundColor }}
         >
-          {visible.map(({ clip }) => (
-            <PreviewObject key={clip.id} clip={clip} stageW={stage.w} stageH={stage.h} canvasW={cw} />
+          {visible.map(({ clip, track }) => (
+            <PreviewObject key={clip.id} clip={clip} trackOpacity={track.opacity ?? 1} stageW={stage.w} stageH={stage.h} canvasW={cw} />
           ))}
           {/* safe-area guide */}
           <div className="pointer-events-none absolute inset-[5%] border border-dashed border-white/15" />
@@ -131,13 +131,13 @@ export function PreviewCanvas() {
   );
 }
 
-function PreviewObject({ clip, stageW, stageH, canvasW }: { clip: Clip; stageW: number; stageH: number; canvasW: number }) {
+function PreviewObject({ clip, trackOpacity, stageW, stageH, canvasW }: { clip: Clip; trackOpacity: number; stageW: number; stageH: number; canvasW: number }) {
   const asset = useStore((s) => s.project.mediaLibrary.find((a) => a.id === clip.assetId));
   const playhead = useStore((s) => s.editor.playheadTicks);
   const tr = clip.transform;
 
-  // fade envelope → opacity for visual clips
-  const op = clip.opacity * fadeGain(playhead, clip.timelineStart, clip.timelineEnd, clip.opacityFadeIn, clip.opacityFadeOut);
+  // fade envelope × clip opacity × track-level opacity
+  const op = trackOpacity * clip.opacity * fadeGain(playhead, clip.timelineStart, clip.timelineEnd, clip.opacityFadeIn, clip.opacityFadeOut);
 
   const flip = `scaleX(${tr.flipH ? -1 : 1}) scaleY(${tr.flipV ? -1 : 1})`;
   const base = {

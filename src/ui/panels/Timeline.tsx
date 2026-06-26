@@ -51,7 +51,11 @@ export function Timeline() {
   const laneWidth = durSec * zoom;
   const pxPerTick = zoom / 600;
 
-  const step = zoom < 12 ? 10 : zoom < 30 ? 5 : zoom < 80 ? 2 : 1;
+  // Pixel-aware ruler step: pick the smallest "nice" interval whose on-screen
+  // width clears MIN_LABEL_PX so labels never pile up — at any zoom or duration.
+  const MIN_LABEL_PX = 76;
+  const NICE = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200];
+  const step = NICE.find((n) => n * zoom >= MIN_LABEL_PX) ?? NICE[NICE.length - 1];
   const ruler: number[] = [];
   for (let s = 0; s <= durSec; s += step) ruler.push(s);
 
@@ -415,11 +419,11 @@ function ClipView({
       title={clip.label ?? clip.id}
     >
       <span className="pointer-events-none truncate">{clip.text ? clip.text.content : clip.label ?? clip.id}</span>
-      {/* trim handles (media clips, unlocked) */}
-      {clip.assetId && !locked && (
+      {/* trim handles — any unlocked clip, incl. text (sourceIn/Out drive its duration) */}
+      {!locked && (
         <>
-          <div className="absolute inset-y-0 left-0 w-1.5 cursor-ew-resize bg-white/0 hover:bg-white/40" onMouseDown={trimEdge("in")} />
-          <div className="absolute inset-y-0 right-0 w-1.5 cursor-ew-resize bg-white/0 hover:bg-white/40" onMouseDown={trimEdge("out")} />
+          <div className="absolute inset-y-0 left-0 z-10 w-2 cursor-ew-resize bg-white/0 hover:bg-white/40" onMouseDown={trimEdge("in")} />
+          <div className="absolute inset-y-0 right-0 z-10 w-2 cursor-ew-resize bg-white/0 hover:bg-white/40" onMouseDown={trimEdge("out")} />
         </>
       )}
     </div>

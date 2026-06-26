@@ -2,11 +2,12 @@
 // media to the renderer (so <video>/<img> can load user files under webSecurity),
 // and IPC for ffprobe-based import.
 import { app, BrowserWindow, ipcMain, dialog, protocol, net } from "electron";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash } from "node:crypto";
 import { open, stat, mkdir, readFile, writeFile, readdir } from "node:fs/promises";
+import { buildExportArgs, runExport, findFont, type ProjectDoc, type ExportOpts } from "./export";
 
 const execFileP = promisify(execFile);
 
@@ -231,6 +232,161 @@ async function detectSilence(path: string) {
   return { schemaVersion: SILENCE_SCHEMA_VERSION, analyzedAt: Date.now(), threshold: "-30dB", minDurSec: 0.5, silenceCount: silences.length, silences };
 }
 
+// ---- loudness / waveform envelope (ffmpeg; always available) ----
+// Decode to mono PCM and reduce to a coarse RMS envelope so the model can "see"
+// the audio as text: where it's loud vs quiet (highs/lows), prominent hits, and
+// overall dynamics. The heavy PCM never leaves this process — only the envelope.
+const WAVEFORM_SCHEMA_VERSION = 1;
+const ENV_HZ = 50; // envelope resolution (points per second, 20ms windows)
+const DECODE_HZ = 8000; // plenty for loudness/onset; keeps the PCM small
+
+async function decodeMono(path: string, hz: number): Promise<Int16Array> {
+  const { stdout } = await execFileP(
+    "ffmpeg",
+    ["-v", "quiet", "-i", path, "-ac", "1", "-ar", String(hz), "-f", "s16le", "-"],
+    { encoding: "buffer", maxBuffer: 256 * 1024 * 1024 },
+  );
+  const buf = stdout as unknown as Buffer;
+  const n = Math.floor(buf.length / 2);
+  const pcm = new Int16Array(n);
+  for (let i = 0; i < n; i++) pcm[i] = buf.readInt16LE(i * 2);
+  return pcm;
+}
+
+function rmsEnvelope(pcm: Int16Array, hz: number) {
+  const win = Math.max(1, Math.round(hz / ENV_HZ));
+  const env: number[] = [];
+  let peak = 0;
+  let sumSq = 0;
+  for (let i = 0; i < pcm.length; i += win) {
+    const end = Math.min(i + win, pcm.length);
+    let s = 0;
+    let p = 0;
+    for (let j = i; j < end; j++) {
+      const v = Math.abs(pcm[j]);
+      s += v * v;
+      if (v > p) p = v;
+    }
+    env.push(Math.sqrt(s / Math.max(1, end - i)) / 32768);
+    sumSq += s;
+    peak = Math.max(peak, p / 32768);
+  }
+  return { env, peak, rms: Math.sqrt(sumSq / Math.max(1, pcm.length)) / 32768 };
+}
+
+/** Merge a boolean mask (per env-window) into [start,end] spans ≥ minDur seconds. */
+function maskSpans(mask: boolean[], minDur: number) {
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const spans: { start: number; end: number }[] = [];
+  let run = -1;
+  for (let i = 0; i <= mask.length; i++) {
+    if (i < mask.length && mask[i]) {
+      if (run < 0) run = i;
+    } else if (run >= 0) {
+      const start = run / ENV_HZ;
+      const end = i / ENV_HZ;
+      if (end - start >= minDur) spans.push({ start: r2(start), end: r2(end) });
+      run = -1;
+    }
+  }
+  return spans;
+}
+
+async function analyzeWaveform(path: string, durationSec: number) {
+  const pcm = await decodeMono(path, DECODE_HZ);
+  const { env, peak, rms } = rmsEnvelope(pcm, DECODE_HZ);
+  // Normalise by the 95th percentile (not the max) so a single transient hit
+  // doesn't crush a sustained loud section below the "loud" threshold.
+  const sorted = [...env].sort((a, b) => a - b);
+  const ref = Math.max(1e-6, sorted[Math.floor(sorted.length * 0.95)] ?? 0);
+  const norm = env.map((v) => Math.min(1, v / ref));
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+
+  // downsample to ~200 points as 0..100 ints for a compact, text-friendly curve
+  const TARGET = 200;
+  const step = Math.max(1, Math.ceil(norm.length / TARGET));
+  const points: number[] = [];
+  for (let i = 0; i < norm.length; i += step) {
+    let s = 0;
+    const end = Math.min(i + step, norm.length);
+    for (let j = i; j < end; j++) s += norm[j];
+    points.push(Math.round((s / (end - i)) * 100));
+  }
+
+  const loud = maskSpans(norm.map((v) => v > 0.6), 0.3);
+  const quiet = maskSpans(norm.map((v) => v < 0.15), 0.4);
+  // prominent hits: local maxima above 0.6, spaced ≥0.3s apart
+  const peaks: number[] = [];
+  let lastPeak = -1;
+  for (let i = 1; i < norm.length - 1; i++) {
+    if (norm[i] > 0.6 && norm[i] >= norm[i - 1] && norm[i] > norm[i + 1]) {
+      const t = i / ENV_HZ;
+      if (lastPeak < 0 || t - lastPeak >= 0.3) { peaks.push(r2(t)); lastPeak = t; }
+    }
+  }
+  return {
+    schemaVersion: WAVEFORM_SCHEMA_VERSION, analyzedAt: Date.now(),
+    durationSec: r2(durationSec), envHz: ENV_HZ,
+    peak: r2(peak), rms: r2(rms),
+    points, loud, quiet, peaks,
+  };
+}
+
+// ---- beat tracking (aubiotrack if present; energy-onset fallback otherwise) ----
+const BEATS_SCHEMA_VERSION = 1;
+
+async function aubioBeats(path: string): Promise<number[] | null> {
+  if (!(await commandExists("aubiotrack"))) return null;
+  const { stdout } = await execFileP("aubiotrack", [path], { maxBuffer: 16 * 1024 * 1024 });
+  return stdout.split("\n").map((l) => Number(l.trim())).filter((n) => Number.isFinite(n) && n >= 0);
+}
+
+/** Approximate beats from the loudness envelope's energy flux — used when no
+ *  beat-tracking backend is installed. Coarser than aubio but always works. */
+function energyBeats(env: number[]): number[] {
+  const flux = env.map((v, i) => (i === 0 ? 0 : Math.max(0, v - env[i - 1])));
+  const mean = flux.reduce((a, b) => a + b, 0) / Math.max(1, flux.length);
+  const std = Math.sqrt(flux.reduce((a, b) => a + (b - mean) ** 2, 0) / Math.max(1, flux.length));
+  const thresh = mean + 1.2 * std;
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const beats: number[] = [];
+  let last = -1;
+  for (let i = 1; i < flux.length - 1; i++) {
+    if (flux[i] > thresh && flux[i] >= flux[i - 1] && flux[i] > flux[i + 1]) {
+      const t = i / ENV_HZ;
+      if (last < 0 || t - last >= 0.18) { beats.push(r2(t)); last = t; } // ≤~330bpm
+    }
+  }
+  return beats;
+}
+
+function tempoFromBeats(beats: number[]): { bpm: number; medianIntervalSec: number } {
+  if (beats.length < 2) return { bpm: 0, medianIntervalSec: 0 };
+  const intervals = [];
+  for (let i = 1; i < beats.length; i++) intervals.push(beats[i] - beats[i - 1]);
+  intervals.sort((a, b) => a - b);
+  const median = intervals[Math.floor(intervals.length / 2)] || 0;
+  return { bpm: median > 0 ? Math.round(60 / median) : 0, medianIntervalSec: Math.round(median * 100) / 100 };
+}
+
+async function analyzeBeats(path: string, durationSec: number) {
+  let beats = await aubioBeats(path);
+  let method = "aubio";
+  if (!beats || beats.length < 2) {
+    const pcm = await decodeMono(path, DECODE_HZ);
+    const { env } = rmsEnvelope(pcm, DECODE_HZ);
+    beats = energyBeats(env);
+    method = "energy";
+  }
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const { bpm, medianIntervalSec } = tempoFromBeats(beats);
+  return {
+    schemaVersion: BEATS_SCHEMA_VERSION, analyzedAt: Date.now(),
+    durationSec: r2(durationSec), method, bpm, medianIntervalSec,
+    beatCount: beats.length, beats: beats.map(r2),
+  };
+}
+
 // ---- job orchestration ----
 // Async by design: analysis (ffmpeg/whisper) far exceeds the MCP bridge's 10s
 // timeout, so callers START a job and POLL status; they never block on it.
@@ -245,6 +401,8 @@ const ANALYZERS: Record<string, Analyzer> = {
   shots: { run: (p, c) => detectShots(p, c.durationSec) },
   silence: { run: (p) => detectSilence(p) },
   transcript: { run: (p, c) => transcribe(p, c.hash), available: async () => (await transcriptBackend()) !== null },
+  waveform: { run: (p, c) => analyzeWaveform(p, c.durationSec) },
+  beats: { run: (p, c) => analyzeBeats(p, c.durationSec) },
 };
 
 // "ok" | "unsupported" (no analyzer) | "unavailable" (backend not installed)
@@ -285,6 +443,24 @@ async function analysisStatus(hash: string, kinds: string[]): Promise<Record<str
   return out;
 }
 
+// ---- project files (a project is a folder holding project.json) ----
+// Assets are referenced by absolute path (not copied), so the folder only needs
+// to carry the document JSON. New/Open/Save all flow through these handlers.
+const PROJECT_FILE = "project.json";
+
+async function readProjectAt(dir: string): Promise<string | null> {
+  try {
+    return await readFile(join(dir, PROJECT_FILE), "utf8");
+  } catch {
+    return null;
+  }
+}
+
+async function writeProjectAt(dir: string, json: string): Promise<void> {
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, PROJECT_FILE), json, "utf8");
+}
+
 app.whenReady().then(() => {
   // Serve local files to the renderer via ocean-media://media<abs-path>
   protocol.handle("ocean-media", (request) => {
@@ -319,6 +495,60 @@ app.whenReady().then(() => {
     const path = res.filePaths[0];
     const info = await probe(path);
     return { path, name: path.split("/").pop() ?? path, ...info };
+  });
+
+  // ---- project file IO ----
+  ipcMain.handle("project-pick-new", async (_e, defaultName: string) => {
+    const res = await dialog.showSaveDialog({
+      title: "Create Project",
+      defaultPath: defaultName || "Untitled",
+      buttonLabel: "Create Project",
+      properties: ["createDirectory"],
+    });
+    if (res.canceled || !res.filePath) return null;
+    // Treat the chosen path as the project folder (strip any extension the OS added).
+    const p = res.filePath;
+    return p.replace(/\.(ocean|json)$/i, "");
+  });
+  ipcMain.handle("project-open", async () => {
+    const res = await dialog.showOpenDialog({
+      title: "Open Project",
+      buttonLabel: "Open",
+      properties: ["openDirectory"],
+    });
+    if (res.canceled || !res.filePaths[0]) return null;
+    const dir = res.filePaths[0];
+    const json = await readProjectAt(dir);
+    if (json == null) throw new Error(`No ${PROJECT_FILE} in ${basename(dir)}`);
+    return { path: dir, json };
+  });
+  ipcMain.handle("project-read", (_e, dir: string) => readProjectAt(dir));
+  ipcMain.handle("project-save", async (_e, dir: string, json: string) => {
+    await writeProjectAt(dir, json);
+    return true;
+  });
+
+  // ---- export ----
+  ipcMain.handle("export-pick", async (_e, defaultName: string) => {
+    const res = await dialog.showSaveDialog({
+      title: "Export Video",
+      defaultPath: defaultName.endsWith(".mp4") ? defaultName : `${defaultName}.mp4`,
+      buttonLabel: "Export",
+      filters: [{ name: "MP4 video", extensions: ["mp4"] }],
+    });
+    return res.canceled || !res.filePath ? null : res.filePath;
+  });
+  ipcMain.handle("export-video", async (e, spec: { project: ProjectDoc } & ExportOpts) => {
+    try {
+      const fontFile = await findFont();
+      const { args, durationSec } = buildExportArgs(spec.project, spec, fontFile);
+      await runExport(args, durationSec, (p) => {
+        if (!e.sender.isDestroyed()) e.sender.send("export-progress", p);
+      });
+      return { ok: true, outPath: spec.outPath };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
   });
 
   createWindow();
